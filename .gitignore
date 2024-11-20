@@ -1,2 +1,4 @@
 remindria_venv/
 .env
+project_planning/
+*__pycache__/
