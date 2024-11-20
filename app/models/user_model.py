@@ -31,6 +31,7 @@ class UserModel:
         self,
         username,
         email,
+        password,
         phone_number,
         nationality,
         age,
@@ -43,6 +44,7 @@ class UserModel:
         Args:
             username (str): The user's unique username.
             email (str): The user's email address.
+            password (str): The user's password.
             phone_number (str): The user's phone number.
             nationality (str): The user's nationality.
             age (int): The user's age.
@@ -52,6 +54,7 @@ class UserModel:
         """
         self.username = username
         self.email = email
+        self.password = password
         self.phone_number = phone_number
         self.nationality = nationality
         self.age = age
@@ -76,6 +79,7 @@ class UserModel:
         return {
             "username": self.username,
             "email": self.email,
+            "password": self.password,
             "phone_number": self.phone_number,
             "nationality": self.nationality,
             "age": self.age,
@@ -92,6 +96,7 @@ def create_user(user_data):
         user_data (dict): A dictionary containing user details with the following keys:
             - username (str): The username of the user.
             - email (str): The email address of the user.
+            - password (str): The password of the user.
             - phone_number (str): The user's phone number.
             - nationality (str): The user's nationality.
             - age (int): The user's age.
@@ -106,7 +111,14 @@ def create_user(user_data):
     """
     try:
         # Validate that required fields are present in user_data
-        required_fields = ["username", "email", "phone_number", "nationality", "age"]
+        required_fields = [
+            "username",
+            "email",
+            "password",
+            "phone_number",
+            "nationality",
+            "age",
+        ]
         missing_fields = [field for field in required_fields if field not in user_data]
         if missing_fields:
             raise ValueError(f"Missing required fields: {', '.join(missing_fields)}")
