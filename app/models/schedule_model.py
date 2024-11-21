@@ -1,6 +1,6 @@
 from db import db  # Import the initialized db object
 from bson.objectid import ObjectId
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 # Collection reference
 schedule_collection = db["schedules"]
@@ -191,6 +191,66 @@ def find_schedules_by_user_id(user_id):
         raise ValueError(f"Validation Error: {ve}")
     except Exception as e:
         raise Exception(f"Failed to fetch schedules for user ID '{user_id}': {e}")
+
+
+def get_schedules_within_range(user_id, time_range, range_type="days"):
+    """
+    Retrieves schedules for a specific user within a given time range.
+
+    Args:
+        user_id (str): The ID of the user whose schedules need to be fetched.
+        time_range (int): The range of time (in hours, days, or minutes) to filter schedules.
+        range_type (str): The unit of the time range. Can be "days", "hours", or "minutes".
+                          Defaults to "days".
+
+    Returns:
+        list: A list of schedule documents within the specified time range.
+
+    Raises:
+        ValueError: If the provided user_id is not a valid ObjectId or if inputs are invalid.
+        pymongo.errors.PyMongoError: If there is a database-related error.
+    """
+    try:
+        # Validate the user_id
+        if not ObjectId.is_valid(user_id):
+            raise ValueError(f"'{user_id}' is not a valid ObjectId.")
+
+        # Validate the range_type
+        valid_range_types = {"days", "hours", "minutes"}
+        if range_type not in valid_range_types:
+            raise ValueError(
+                f"'range_type' must be one of {valid_range_types}. Got '{range_type}'."
+            )
+
+        # Calculate the range in seconds based on the range_type
+        now = datetime.now(timezone.utc)
+        if range_type == "days":
+            delta = timedelta(days=time_range)
+        elif range_type == "hours":
+            delta = timedelta(hours=time_range)
+        elif range_type == "minutes":
+            delta = timedelta(minutes=time_range)
+
+        # Define the time window
+        start_time = now
+        end_time = now + delta
+
+        # Fetch schedules within the range for the user
+        schedules = list(
+            schedule_collection.find(
+                {
+                    "user_id": ObjectId(user_id),
+                    "schedule_date": {"$gte": start_time, "$lte": end_time},
+                }
+            )
+        )
+
+        return schedules
+
+    except ValueError as ve:
+        raise ValueError(f"Validation Error: {ve}")
+    except Exception as e:
+        raise Exception(f"Failed to fetch schedules within range: {e}")
 
 
 # Function to update a schedule by ID

@@ -8,12 +8,13 @@ load_dotenv()
 
 class Config:
     MONGO_HOST = os.getenv("MONGO_HOST")
-    MONGO_PORT = os.getenv("MONGO_PORT")
+    MONGO_PORT = int(os.getenv("MONGO_PORT"))
     MONGO_DB = os.getenv("MONGO_DB")
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(
         hours=int(os.getenv("JWT_ACCESS_TOKEN_EXPIRES"))
     )
+    FLASK_ENV = os.getenv("FLASK_ENV") or "production"
 
 
 config = Config()
