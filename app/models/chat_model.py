@@ -106,7 +106,10 @@ def add_message_to_chat(chat_id, message):
             raise ValueError(f"'{chat_id}' is not a valid ObjectId.")
         update_result = chat_collection.update_one(
             {"_id": ObjectId(chat_id)},
-            {"$push": {"messages": message}, "$set": {"updated_at": datetime.utcnow()}},
+            {
+                "$push": {"messages": message},
+                "$set": {"updated_at": datetime.now(timezone.utc)},
+            },
         )
         return update_result.modified_count
     except Exception as e:
