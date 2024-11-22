@@ -3,3 +3,4 @@ remindria_venv/
 project_planning/
 *__pycache__/
 print.txt
+*.json
