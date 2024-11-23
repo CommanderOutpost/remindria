@@ -1,0 +1,173 @@
+from datetime import datetime
+from flask import request, jsonify
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from bson.errors import InvalidId
+
+from app.models.token_model import (
+    create_token,
+    find_token_by_user_and_service,
+    find_tokens_by_user,
+)
+
+
+@jwt_required()
+def add_token():
+    """
+    Handles the addition of a new token for a service. Requires JWT authentication.
+
+    Request JSON Body:
+        {
+            "service_name": "string",  # Name of the service (required, e.g., "google")
+            "access_token": "string",  # Access token for the service (required)
+            "refresh_token": "string",  # Refresh token for the service (optional)
+            "token_expiry": "string"  # ISO 8601 format datetime (optional)
+        }
+
+    Returns:
+        JSON Response:
+            - Success: {"message": "Token added successfully", "token_id": "string"}
+            - Error: {"error": "Token for this service already exists"}
+            - Error: {"error": "string"}
+    """
+    try:
+        # Parse request JSON
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Request body is missing"}), 400
+
+        # Get the current user's ID from the JWT
+        user_id = get_jwt_identity()
+        if not user_id:
+            return jsonify({"error": "Unauthorized access"}), 401
+
+        # Validate required fields
+        required_fields = ["service_name", "access_token"]
+        for field in required_fields:
+            if field not in data or not data[field]:
+                return jsonify({"error": f"'{field}' is a required field"}), 400
+
+        # Validate token_expiry if provided
+        token_expiry = None
+        if "token_expiry" in data:
+            try:
+                token_expiry = datetime.fromisoformat(data["token_expiry"])
+            except ValueError:
+                return (
+                    jsonify(
+                        {
+                            "error": "'token_expiry' must be a valid ISO 8601 datetime string"
+                        }
+                    ),
+                    400,
+                )
+
+        # Check if a token already exists for this user and service
+        existing_token = find_token_by_user_and_service(user_id, data["service_name"])
+        if existing_token:
+            # Throw an error if the token already exists
+            return (jsonify({"error": "Token for this service already exists"}), 400)
+
+        # Prepare the token data
+        token_data = {
+            "user_id": user_id,  # Use the authenticated user's ID
+            "service_name": data["service_name"],
+            "access_token": data["access_token"],
+            "refresh_token": data.get("refresh_token", None),  # Optional field
+            "token_expiry": token_expiry,  # Optional field
+        }
+
+        # Add the token
+        token_id = create_token(token_data)
+        return (
+            jsonify(
+                {
+                    "message": "Token added successfully",
+                    "token_id": str(token_id),
+                }
+            ),
+            201,
+        )
+
+    except InvalidId:
+        return jsonify({"error": "Invalid user ID in JWT"}), 400
+    except Exception as e:
+        return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
+
+
+@jwt_required()
+def get_token(service_name):
+    """
+    Handles the retrieval of a token for a service. Requires JWT authentication.
+
+    Args:
+        service_name (str): The name of the service (e.g., "google").
+
+    Returns:
+        JSON Response:
+            - Success: {"access_token": "string", "refresh_token": "string", "token_expiry": "string"}
+            - Error: {"error": "string"}
+    """
+    try:
+        # Get the current user's ID from the JWT
+        user_id = get_jwt_identity()
+        if not user_id:
+            return jsonify({"error": "Unauthorized access"}), 401
+
+        # Find the token for the user and service
+        token = find_token_by_user_and_service(user_id, service_name)
+        if not token:
+            return jsonify({"error": "Token not found"}), 404
+
+        # Prepare the response
+        token_data = {
+            "access_token": token["access_token"],
+            "refresh_token": token.get("refresh_token", None),
+            "token_expiry": token.get("token_expiry", None),
+        }
+
+        return jsonify(token_data)
+
+    except InvalidId:
+        return jsonify({"error": "Invalid user ID in JWT"}), 400
+    except Exception as e:
+        return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
+
+
+@jwt_required()
+def get_all_tokens():
+    """
+    Handles the retrieval of all tokens for the current user. Requires JWT authentication.
+
+    Returns:
+        JSON Response:
+            - Success: [{"service_name": "string", "access_token": "string", "refresh_token": "string", "token_expiry": "string"}]
+            - Error: {"error": "string"}
+    """
+    try:
+        # Get the current user's ID from the JWT
+        user_id = get_jwt_identity()
+        if not user_id:
+            return jsonify({"error": "Unauthorized access"}), 401
+
+        # Find all tokens for the user
+        tokens = find_tokens_by_user(user_id)
+        if not tokens:
+            return jsonify([])
+
+        # Prepare the response
+        token_data = [
+            {
+                "service_name": token["service_name"],
+                "access_token": token["access_token"],
+                "refresh_token": token.get("refresh_token", None),
+                "token_expiry": token.get("token_expiry", None),
+            }
+            for token in tokens
+        ]
+
+        return jsonify(token_data)
+
+    except InvalidId:
+        return jsonify({"error": "Invalid user ID in JWT"}), 400
+    except Exception as e:
+        return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500

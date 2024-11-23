@@ -15,6 +15,8 @@ class Config:
         hours=int(os.getenv("JWT_ACCESS_TOKEN_EXPIRES"))
     )
     FLASK_ENV = os.getenv("FLASK_ENV") or "production"
+    GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+    GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 
 
 config = Config()
