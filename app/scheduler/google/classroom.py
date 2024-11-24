@@ -2,25 +2,22 @@ from datetime import datetime
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 
-SCOPES = [
-    "https://www.googleapis.com/auth/classroom.courses.readonly",
-    "https://www.googleapis.com/auth/classroom.coursework.me",
-    "https://www.googleapis.com/auth/classroom.student-submissions.me.readonly",
-]
 
-
-def get_upcoming_coursework(creds):
+def get_upcoming_coursework(access_token):
     """
-    Retrieves coursework due after today's date and time and returns it as a dictionary array.
+    Retrieves coursework due after today's date and time using an access token.
 
     Args:
-        creds (Credentials): Google API credentials object.
+        access_token (str): Google API access token.
 
     Returns:
         list: A list of dictionaries containing reminder messages and schedule details.
     """
     results = []
     try:
+        # Create credentials from the access token
+        creds = Credentials(token=access_token)
+
         # Initialize the Classroom API
         service = build("classroom", "v1", credentials=creds)
 
@@ -74,6 +71,6 @@ def get_upcoming_coursework(creds):
                             }
                             results.append(result)
     except Exception as error:
-        print(f"An error occurred: {error}")
+        raise Exception(f"An error occurred: {error}")
 
     return results
