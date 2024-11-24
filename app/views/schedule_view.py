@@ -8,8 +8,14 @@ from app.models.schedule_model import (
     update_schedule as update_schedule_model,
     delete_schedule as delete_schedule_model,
 )
-from datetime import datetime
+from datetime import datetime, timezone
 from bson.errors import InvalidId
+
+from app.models.token_model import find_token_by_user_and_service, update_token
+from app.scheduler.google.authentication import refresh_google_access_token
+from app.scheduler.google.classroom import get_upcoming_coursework
+
+from config import config
 
 
 @jwt_required()
@@ -321,5 +327,126 @@ def delete_schedule(id):
 
     except InvalidId:
         return jsonify({"error": "Invalid ObjectId for schedule_id"}), 400
+    except Exception as e:
+        return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
+
+
+@jwt_required()
+def sync_google_coursework_to_schedules():
+    """
+    Syncs upcoming Google Classroom coursework to the schedule database for the authenticated user.
+
+    Requires JWT authentication.
+
+    Returns:
+        JSON Response:
+            - Success: {"message": "Coursework synced successfully", "new_schedules": [<schedule_ids>]}
+            - No New Coursework: {"message": "No new coursework found to sync"}
+            - Error: {"error": "string"}
+    """
+    try:
+        # Get the current user's ID from the JWT
+        user_id = get_jwt_identity()
+        if not user_id:
+            return jsonify({"error": "Unauthorized access"}), 401
+
+        # Retrieve the token for Google Classroom
+        try:
+            token_data = find_token_by_user_and_service(user_id, "google_classroom")
+            if not token_data:
+                return jsonify({"error": "No token found for Google Classroom"}), 404
+        except Exception as e:
+            return jsonify({"error": f"Failed to retrieve token: {str(e)}"}), 500
+
+        # Check if the token is expired
+        access_token = token_data.get("access_token")
+        refresh_token = token_data.get("refresh_token")
+        token_expiry = token_data.get("token_expiry")
+
+        if not access_token or not refresh_token or not token_expiry:
+            return jsonify({"error": "Token data is incomplete"}), 500
+
+        # Ensure token_expiry is a datetime object
+        if isinstance(token_expiry, str):
+            token_expiry = datetime.fromisoformat(token_expiry)
+
+        # Make token_expiry offset-aware if it's naive
+        if token_expiry.tzinfo is None:
+            token_expiry = token_expiry.replace(tzinfo=timezone.utc)
+
+        # Refresh the token if expired
+        if token_expiry <= datetime.now(timezone.utc):
+            try:
+                refreshed_token = refresh_google_access_token(
+                    refresh_token,
+                    config.GOOGLE_CLIENT_ID,
+                    config.GOOGLE_CLIENT_SECRET,
+                )
+                access_token = refreshed_token["access_token"]
+
+                # Update the token in the database
+                update_token(
+                    user_id,
+                    "google_classroom",
+                    {
+                        "access_token": refreshed_token["access_token"],
+                        "token_expiry": refreshed_token["expiry"].isoformat(),
+                    },
+                )
+            except Exception as e:
+                return jsonify({"error": f"Failed to refresh token: {str(e)}"}), 500
+
+        # Fetch upcoming coursework using the valid access token
+        try:
+            coursework = get_upcoming_coursework(access_token)
+        except Exception as e:
+            return jsonify({"error": f"Failed to fetch coursework: {str(e)}"}), 500
+
+        # Get existing schedules for the user
+        existing_schedules = find_schedules_by_user_id(user_id)
+        existing_reminders = {
+            schedule["reminder_message"] for schedule in existing_schedules
+        }
+
+        # Add new coursework to schedules
+        new_schedule_ids = []
+        for work in coursework:
+            reminder_message = work["reminder_message"]
+            schedule_date = datetime.fromisoformat(work["due_date"])
+
+            if reminder_message not in existing_reminders:
+                # Prepare schedule data
+                schedule_data = {
+                    "user_id": user_id,
+                    "reminder_message": reminder_message,
+                    "schedule_date": schedule_date,
+                    "recurrence": None,  # Coursework doesn't recur by default
+                    "status": "Pending",
+                }
+
+                # Add the schedule to the database
+                try:
+                    schedule_id = create_schedule(schedule_data)
+                    new_schedule_ids.append(schedule_id)
+                except Exception as e:
+                    return (
+                        jsonify({"error": f"Failed to create schedule: {str(e)}"}),
+                        500,
+                    )
+
+        # Return appropriate response based on whether new schedules were added
+        if not new_schedule_ids:
+            return jsonify({"message": "No new coursework found to sync"}), 200
+
+        return (
+            jsonify(
+                {
+                    "message": "Coursework synced successfully",
+                    "new_schedules": new_schedule_ids,
+                }
+            ),
+            201,
+        )
+
     except Exception as e:
         return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500

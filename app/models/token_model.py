@@ -1,5 +1,4 @@
 from config import config
-from google.oauth2.credentials import Credentials
 from db import db
 from bson.objectid import ObjectId
 from datetime import datetime, timezone
@@ -102,52 +101,3 @@ def delete_token(user_id, service_name):
         return result.deleted_count
     except Exception as e:
         raise Exception(f"Failed to delete token: {e}")
-
-
-def create_creds_from_db(user_id, service_name="google"):
-    """
-    Creates Google API credentials from stored tokens in the database
-    and client_id/client_secret from environment variables.
-
-    Args:
-        user_id (str): The user's ID in the database.
-        service_name (str): The name of the service (default is "google").
-
-    Returns:
-        Credentials: Google API credentials object.
-
-    Raises:
-        Exception: If credentials are not found or invalid.
-    """
-    try:
-        # Get client_id and client_secret from environment variables
-        client_id = config.GOOGLE_CLIENT_ID
-        client_secret = config.GOOGLE_CLIENT_SECRET
-
-        if not client_id or not client_secret:
-            raise Exception(
-                "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set in environment variables."
-            )
-
-        # Retrieve the token for the user and service from the database
-        token = tokens_collection.find_one(
-            {"user_id": ObjectId(user_id), "service_name": service_name}
-        )
-        if not token:
-            raise Exception(
-                f"No token found for user {user_id} and service {service_name}."
-            )
-
-        # Create the credentials object
-        creds = Credentials(
-            token=token["access_token"],
-            refresh_token=token.get("refresh_token"),
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=client_id,
-            client_secret=client_secret,
-        )
-
-        return creds
-
-    except Exception as e:
-        raise Exception(f"Failed to create credentials: {e}")

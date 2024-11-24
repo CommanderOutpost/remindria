@@ -26,7 +26,6 @@ def get_upcoming_coursework(access_token):
         courses = courses_result.get("courses", [])
 
         if not courses:
-            print("No courses found.")
             return results
 
         # Iterate through each course to get coursework
