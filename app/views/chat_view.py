@@ -5,7 +5,7 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.models.user_model import find_user_by_id
 from app.models.schedule_model import find_schedules_by_user_id
 from app.utils.helper import format_schedule_human_readable
-from app.caller.ai import get_ai_response
+from app.ai.caller import get_ai_response
 from app.models.chat_model import (
     create_chat,
     find_chat_by_id,
