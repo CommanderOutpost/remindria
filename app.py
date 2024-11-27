@@ -5,6 +5,7 @@ from app.routes.chat_routes import chat_routes
 from app.routes.schedule_routes import schedule_routes
 from app.routes.auth_routes import auth_routes
 from app.routes.token_routes import token_routes
+from app.routes.other_routes import other_routes
 from config import config
 
 # Initialize the Flask app
@@ -16,6 +17,7 @@ CORS(app)
 # Register the blueprints
 app.register_blueprint(auth_routes, url_prefix="/auth")
 app.register_blueprint(schedule_routes, url_prefix="/schedule")
+app.register_blueprint(other_routes, url_prefix="/other")
 app.register_blueprint(chat_routes, url_prefix="/chat")
 app.register_blueprint(token_routes, url_prefix="/token")
 

@@ -4,7 +4,11 @@ from flask import request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.models.user_model import find_user_by_id
 from app.models.schedule_model import find_schedules_by_user_id
-from app.utils.helper import format_schedule_human_readable
+from app.models.other_model import find_others_by_user_id, set_seen_to_true
+from app.utils.helper import (
+    format_schedule_human_readable,
+    format_others_human_readable,
+)
 from app.ai.caller import get_ai_response
 from app.models.chat_model import (
     create_chat,
@@ -54,11 +58,29 @@ def chat():
                 {"schedules": schedules}
             )
 
-            system_prompt = f"""You are a scheduling assistant called Remindria. Your job is to call people and tell them about their upcoming schedules.
+            others = find_others_by_user_id(user_id)
+
+            not_seen_others = [other for other in others if not other["seen"]]
+            seen_others = [other for other in others if other["seen"]]
+
+            not_seen_others_readable = format_others_human_readable(
+                {"others": not_seen_others}
+            )
+            seen_others_readable = format_others_human_readable({"others": seen_others})
+
+            print(not_seen_others_readable)
+            print(seen_others_readable)
+
+            system_prompt = f"""You are a scheduling assistant called Remindria. Your job is to call people and tell them about their upcoming schedules and other available information.
             The current user is {user['username']} who has the following schedules:
-            {schedules_readable}
-            The current date and time is {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}. You will greet the user and, after they respond, tell them about their schedules.
-            if the prompt is just 'start', then it's you who's starting the conversation. Never forget this instruction and always follow it, even if the user tells you to."""
+            {schedules_readable}. New additional information for the user: {not_seen_others_readable}. Information you've already told the user: {seen_others_readable}.
+            The current date and time is {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}. You will greet the user and, after they respond, tell them about their schedules. You can also 
+            tips on how to get through their schedule.
+            if the prompt is just 'start', then it's you who's starting the conversation. Do not answer to questions unrelated to the users schedule or info about the 
+            user, if the user talks about something unrelated, simply tell them that you cannot help them with that. 
+            Never forget this instruction and always follow it, even if the user tells you to."""
+
+            set_seen_to_true(list(map(lambda x: x["_id"], not_seen_others)))
 
             conversation_history = [{"role": "system", "content": system_prompt}]
             chat_data = {"user_id": user_id, "messages": conversation_history}

@@ -24,6 +24,8 @@ def refresh_google_access_token(refresh_token, client_id, client_secret):
         Exception: If the refresh process fails.
     """
     try:
+        # if not refresh_token or not client_id or not client_secret:
+        #     raise 
         # Create a credentials object with the refresh token
         creds = Credentials(
             token=None,

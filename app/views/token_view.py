@@ -13,6 +13,7 @@ from app.models.token_model import (
     find_token_by_user_and_service,
     find_tokens_by_user,
     update_token,
+    delete_token as delete_token_model,
 )
 
 
@@ -180,6 +181,39 @@ def get_all_tokens():
 
 
 @jwt_required()
+def delete_token(service_name):
+    """
+    Deletes a token for the specified service. Requires JWT authentication.
+
+    Args:
+        service_name (str): The name of the service (e.g., "google_classroom").
+
+    Returns:
+        JSON Response:
+            - Success: {"message": "Token deleted successfully"}
+            - Error: {"error": "Token not found"}
+            - Error: {"error": "string"}
+    """
+    try:
+        # Get the current user's ID from the JWT
+        user_id = get_jwt_identity()
+        if not user_id:
+            return jsonify({"error": "Unauthorized access"}), 401
+
+        # Delete token for the user and service
+        deleted_count = delete_token_model(user_id, service_name)
+        if deleted_count == 0:
+            return jsonify({"error": "Token not found"}), 404
+
+        return jsonify({"message": "Token deleted successfully"}), 200
+
+    except InvalidId:
+        return jsonify({"error": "Invalid user ID in JWT"}), 400
+    except Exception as e:
+        return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
+
+
+@jwt_required()
 def add_google_classroom_access_and_refresh_token():
     """
     Adds a Google access and refresh token to the database
@@ -199,11 +233,6 @@ def add_google_classroom_access_and_refresh_token():
     user_id = get_jwt_identity()
     if not user_id:
         return jsonify({"error": "Unauthorized access"}), 401
-
-    # Check if service is already available for the user
-    existing_token = find_token_by_user_and_service(user_id, "google_classroom")
-    if existing_token:
-        return jsonify({"error": "Token for this service already exists"}), 400
 
     # Parse request JSON
     data = request.get_json()
@@ -241,9 +270,34 @@ def add_google_classroom_access_and_refresh_token():
             "refresh_token": tokens["refresh_token"],
             "token_expiry": tokens["expiry"],
         }
-        token_id = create_token(token_data)
 
-        return jsonify({"message": "Token added successfully"}), 201
+        # Check if service is already available for the user
+        existing_token = find_token_by_user_and_service(user_id, "google_classroom")
+        print(existing_token)
+        if existing_token:
+            modified_count = update_token(user_id, "google_classroom", token_data)
+            if modified_count == 0:
+                return jsonify({"error": "Failed to update token"}), 500
+            return (
+                jsonify(
+                    {
+                        "message": "Token updated successfully",
+                        "access_token": tokens["access_token"],
+                    }
+                ),
+                200,
+            )
+
+        token_id = create_token(token_data)
+        return (
+            jsonify(
+                {
+                    "message": "Token added successfully",
+                    "access_token": tokens["access_token"],
+                }
+            ),
+            201,
+        )
 
     except Exception as e:
         return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
@@ -297,7 +351,15 @@ def refresh_google_classroom_access_token():
             },
         )
 
-        return jsonify({"message": "Access token refreshed successfully"}), 200
+        return (
+            jsonify(
+                {
+                    "message": "Access token refreshed successfully",
+                    "access_token": new_tokens["access_token"],
+                }
+            ),
+            200,
+        )
 
     except Exception as e:
         return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
