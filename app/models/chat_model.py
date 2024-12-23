@@ -25,6 +25,8 @@ class ChatModel:
         messages=None,
         title=None,
         summary_so_far=None,
+        pending_schedule=None,
+        pending_schedule_step=None,
         created_at=None,
         updated_at=None,
     ):
@@ -32,6 +34,8 @@ class ChatModel:
         self.messages = messages or []
         self.title = title
         self.summary_so_far = summary_so_far
+        self.pending_schedule = pending_schedule or {}
+        self.pending_schedule_step = pending_schedule_step or None
         self.created_at = created_at or datetime.now(timezone.utc)
         self.updated_at = updated_at or datetime.now(timezone.utc)
 
@@ -41,6 +45,8 @@ class ChatModel:
             "messages": self.messages,
             "title": self.title,
             "summary_so_far": self.summary_so_far,
+            "pending_schedule": self.pending_schedule,
+            "pending_schedule_step": self.pending_schedule_step,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -190,3 +196,30 @@ def store_summary_in_chat(chat_id, summary):
         )
     except Exception as e:
         raise Exception(f"Failed to store summary in chat: {e}")
+
+
+def get_chat_schedule_state(chat_id):
+    """
+    Returns (pending_schedule, pending_schedule_step) from the chat doc.
+    If not found, returns ({}, None).
+    """
+    chat = chat_collection.find_one({"_id": ObjectId(chat_id)})
+    if not chat:
+        return {}, None
+    return chat.get("pending_schedule", {}), chat.get("pending_schedule_step")
+
+
+def update_chat_schedule_state(chat_id, pending_schedule, pending_schedule_step):
+    """
+    Updates the chat doc with the pending_schedule dict and step.
+    """
+    chat_collection.update_one(
+        {"_id": ObjectId(chat_id)},
+        {
+            "$set": {
+                "pending_schedule": pending_schedule,
+                "pending_schedule_step": pending_schedule_step,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        },
+    )

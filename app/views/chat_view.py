@@ -1,182 +1,343 @@
-# app/views/chat_view.py
-
 from datetime import datetime, timezone
 from flask import request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
 from app.models.user_model import find_user_by_id
-from app.models.chat_model import create_chat, find_chat_by_id, add_message_to_chat
+from app.models.chat_model import (
+    find_chat_by_id,
+    create_chat,
+    add_message_to_chat,
+    find_chats_by_user_id,
+    find_chats_by_user_id_after_date,
+    delete_chat,
+    store_summary_in_chat,
+)
 from app.views.schedule_view import get_30_day_schedules_for_user
 from app.views.other_view import fetch_and_summarize_others
-from app.utils.helper import format_schedule_human_readable
-from app.models.chat_model import (
-    create_chat,
-    find_chat_by_id,
-    add_message_to_chat,
-    store_summary_in_chat,
-    delete_chat,
-    find_chats_by_user_id_after_date,
-    find_chats_by_user_id,
+from app.models.schedule_model import (
+    create_schedule,
+    update_schedule as update_schedule_model,
+    find_schedules_by_user_id,
+    delete_schedule as delete_schedule_model,
+)
+from app.utils.helper import (
+    format_schedule_human_readable,
+    parse_natural_language_instructions,  # We'll modify to accept conversation
 )
 from app.ai.caller import (
     get_ai_response,
     summarize_with_ai,
-    conversation_token_count,
     generate_chat_title,
 )
+
+
+def create_new_chat_with_system_prompt(user_id, user):
+    """
+    Creates a new chat doc with a system prompt tailored to the user's schedule & announcements.
+    Returns: (conversation_history, chat_title, new_chat_id)
+    """
+    # Summaries
+    schedules = get_30_day_schedules_for_user(user_id)
+    if schedules:
+        schedules_readable = format_schedule_human_readable({"schedules": schedules})
+    else:
+        schedules_readable = "No tasks or reminders for the past or upcoming 30 days."
+
+    summary_not_seen, summary_seen = fetch_and_summarize_others(user_id)
+
+    # Build system prompt
+    system_prompt = (
+        "You’re Remindria, a friendly buddy who helps users manage their schedules. "
+        "You talk in a casual, approachable style. Focus on tasks from 30 days before and after today. "
+        f"Here are the user’s relevant schedules:\n\n{schedules_readable}\n\n"
+        f"Here’s a summary of new announcements:\n\n{summary_not_seen}\n\n"
+        f"Here’s a summary of older announcements:\n\n{summary_seen}\n\n"
+        "Greet the user warmly and talk about their current tasks and announcements. "
+        "Keep the vibe casual and helpful. "
+        "If the user asks to create a schedule, ask for all info needed to create it. Ask for only date and time and name for now. "
+        "If the user asks to update a schedule, ask for the schedule they want to update and the information they want to change. "
+        "After finding out what the user wants to update and with what, always ask for confirmation. "
+        "Today's date is " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "."
+    )
+
+    # Generate chat title
+    chat_title = generate_chat_title(
+        user_info=user,
+        schedules_readable=schedules_readable,
+        not_seen_others_readable=summary_not_seen,
+        seen_others_readable=summary_seen,
+    )
+
+    # Start conversation with system message
+    conversation_history = [{"role": "system", "content": system_prompt}]
+
+    # Create the chat in the DB
+    chat_data = {
+        "user_id": user_id,
+        "messages": conversation_history,
+        "title": chat_title,
+    }
+
+    print("DEBUG chat_data:", chat_data)
+
+    new_chat_id = create_chat(chat_data)
+    return conversation_history, chat_title, new_chat_id
+
+
+def get_or_create_chat(user_id, data):
+    """
+    If chat_id is provided, fetch that chat from DB.
+    If not, create a new chat with system prompt.
+    Returns: chat_doc, conversation_history, chat_title, chat_id
+    """
+    chat_id = data.get("chat_id")
+    user = find_user_by_id(user_id)
+    if not user:
+        return None, None, None, None
+
+    if chat_id:
+        chat = find_chat_by_id(chat_id)
+        if not chat or str(chat["user_id"]) != user_id:
+            return None, None, None, None
+        return chat, chat["messages"], chat["title"], chat_id
+
+    # Otherwise create new
+    conversation_history, chat_title, new_id = create_new_chat_with_system_prompt(
+        user_id, user
+    )
+    return {}, conversation_history, chat_title, new_id
+
+
+def append_user_message(chat_id, conversation_history, user_prompt):
+    """
+    Appends the user's message to DB + conversation_history.
+    """
+    user_msg = {"role": "user", "content": user_prompt}
+    add_message_to_chat(chat_id, user_msg)
+    conversation_history.append(user_msg)
+
+
+def maybe_proactive_trimming(chat_id, conversation_history):
+    """
+    If conversation is large, summarize older messages and store in DB.
+    """
+    MAX_RECENT = 8
+    system_msgs = [m for m in conversation_history if m["role"] == "system"]
+    user_assistant_msgs = [
+        m for m in conversation_history if m["role"] in ["user", "assistant"]
+    ]
+
+    if len(user_assistant_msgs) > MAX_RECENT:
+        older_count = len(user_assistant_msgs) - MAX_RECENT
+        older_chunk = user_assistant_msgs[:older_count]
+        recent_chunk = user_assistant_msgs[older_count:]
+
+        summary_text = summarize_with_ai(older_chunk)
+        existing_chat = find_chat_by_id(chat_id)
+        existing_summary = existing_chat.get("summary_so_far") or ""
+
+        combined_summary = (
+            existing_summary + "\n\n" + summary_text
+            if existing_summary
+            else summary_text
+        )
+        store_summary_in_chat(chat_id, combined_summary)
+
+        conversation_history.clear()
+        conversation_history.extend(system_msgs)
+        conversation_history.extend(recent_chunk)
+
+
+def actually_create_schedule(schedule_data, user_id):
+    """
+    Creates schedule in DB and returns success message.
+    schedule_data: { "title": str, "start_time": datetime, "end_time": optional }
+    """
+    title = schedule_data.get("title", "Untitled")
+    start_dt = schedule_data.get("start_time", datetime.now())
+    end_dt = schedule_data.get("end_time")
+
+    payload = {
+        "user_id": user_id,
+        "reminder_message": title,
+        "schedule_date": start_dt,
+        "recurrence": None,
+        "status": "Pending",
+    }
+    created_id = create_schedule(payload)
+    disp_time = start_dt.strftime("%Y-%m-%d %H:%M")
+    return created_id, f"Done! I've created the schedule '{title}' for {disp_time}."
+
+
+def actually_update_schedule(schedule_data, user_id):
+    """
+    schedule_data might look like:
+    {
+      "schedule_identifier": "Doctor Appointment",
+      "new_title": "Doc Appt Updated",  # or None
+      "new_start_time": datetime(...)   # or None
+      "new_end_time": datetime(...)     # or None
+    }
+
+    We'll find the user's schedule whose reminder_message matches schedule_identifier,
+    and then apply the updates.
+    """
+    identifier = schedule_data["schedule_identifier"]
+    new_title = schedule_data.get("new_title")
+    new_start = schedule_data.get("new_start_time")
+    new_end = schedule_data.get("new_end_time")  # optional if you store it in DB
+
+    # 1) Find schedule by name
+    all_schedules = find_schedules_by_user_id(user_id)
+    matching = [s for s in all_schedules if s.get("reminder_message") == identifier]
+    if not matching:
+        return f"Could not find a schedule named '{identifier}' to update."
+
+    # If multiple found, handle or just pick first
+    sched_to_update = matching[0]
+    schedule_id = str(sched_to_update["_id"])
+
+    # 2) Build updates
+    updates = {}
+    if new_title:
+        updates["reminder_message"] = new_title
+    if new_start:
+        updates["schedule_date"] = new_start
+    # If you want to store new_end_time, you'd do something like:
+    # updates["end_date"] = new_end
+
+    if not updates:
+        return "No new changes provided."
+
+    # 3) Perform update
+    count = update_schedule_model(schedule_id, updates)
+    if count == 0:
+        return f"Failed to update schedule '{identifier}'."
+    return f"Successfully updated schedule '{identifier}'."
+
+
+def actually_delete_schedule(schedule_data, user_id):
+    """
+    schedule_data looks like:
+    {
+      "schedule_identifier": "Doctor Appointment"
+    }
+    We'll find the user's schedule whose reminder_message matches schedule_identifier,
+    and then delete it.
+    """
+    identifier = schedule_data["schedule_identifier"]
+    all_schedules = find_schedules_by_user_id(user_id)
+    matching = [s for s in all_schedules if s.get("reminder_message") == identifier]
+    if not matching:
+        return f"Could not find a schedule named '{identifier}' to delete."
+
+    sched_to_delete = matching[0]
+    schedule_id = str(sched_to_delete["_id"])
+
+    # Perform the delete
+    deleted_count = delete_schedule_model(schedule_id)
+    if deleted_count == 0:
+        return f"Failed to delete schedule '{identifier}'."
+    return f"Successfully deleted schedule '{identifier}'."
 
 
 @jwt_required()
 def chat():
     """
-    Main chat endpoint. Either continues an existing chat or starts a new one,
-    then proactively trims older messages if the user+assistant messages exceed
-    some threshold, storing a summary in the chat doc.
+    Main chat endpoint.
+    1. Load or create the chat doc
+    2. Append user message
+    3. Parse entire conversation to see if user wants to add a schedule
+    4. If yes, create schedule
+    5. If no, do normal LLM flow
+    6. Possibly trim older messages
+    7. Return final response
     """
     try:
-        # ----------------------
-        # 1) Basic Setup
-        # ----------------------
         user_id = get_jwt_identity()
-        user = find_user_by_id(user_id)
-        if not user:
-            return jsonify({"error": "User not found"}), 404
+        if not user_id:
+            return jsonify({"error": "User not authenticated"}), 401
 
         data = request.get_json()
-        prompt = data.get("prompt")
-        if not prompt:
+        if not data or "prompt" not in data:
             return jsonify({"error": "Prompt is required"}), 400
+        prompt = data["prompt"]
 
-        chat_id = data.get("chat_id")
+        # 1) Load or create chat
+        chat_doc, conversation_history, chat_title, chat_id = get_or_create_chat(
+            user_id, data
+        )
+        if conversation_history is None:
+            return jsonify({"error": "Chat not found or unauthorized"}), 404
 
-        # ----------------------
-        # 2) Existing Chat or New?
-        # ----------------------
-        if chat_id:
-            chat = find_chat_by_id(chat_id)
-            if not chat:
-                return jsonify({"error": "Chat not found"}), 404
-            if str(chat["user_id"]) != user_id:
-                return jsonify({"error": "Unauthorized access to chat"}), 403
+        # 2) Append user message
+        append_user_message(chat_id, conversation_history, prompt)
 
-            conversation_history = chat["messages"]
-            chat_title = chat["title"]
-        else:
-            # Create a new chat with system prompts
-            # a) Schedules
-            schedules = get_30_day_schedules_for_user(user_id)
-            if schedules:
-                schedules_readable = format_schedule_human_readable(
-                    {"schedules": schedules}
-                )
-            else:
-                schedules_readable = (
-                    "No tasks or reminders for the past or upcoming 30 days."
-                )
+        # 3) Let the LLM parse the entire conversation to see if there's a schedule request
+        intent_result = parse_natural_language_instructions(conversation_history)
+        # If you want, you could do: parse_natural_language_instructions(conversation_history, "Look for schedule creation")
+        if intent_result:
+            intent = intent_result.get("intent")
+            if intent == "add_schedule":
+                # 4) We got a schedule creation request
+                # Gather the data from intent_result
+                schedule_title = intent_result["schedule_title"]
+                start_dt = intent_result["start_time"]
+                end_dt = intent_result["end_time"]
 
-            # b) Summarize 'others'
-            summary_not_seen, summary_seen = fetch_and_summarize_others(user_id)
+                if schedule_title and start_dt:
+                    created_id, success_msg = actually_create_schedule(
+                        {
+                            "title": schedule_title,
+                            "start_time": start_dt,
+                            "end_time": end_dt,
+                        },
+                        user_id,
+                    )
+                    # Add assistant message with success
+                    ai_msg = {"role": "assistant", "content": success_msg}
+                    add_message_to_chat(chat_id, ai_msg)
+                    conversation_history.append(ai_msg)
 
-            # c) Build system prompt
-            system_prompt = (
-                "You’re Remindria, a friendly buddy who helps users manage their schedules. "
-                "You talk in a casual, approachable style, like you’ve known them for years. "
-                "You focus on reminders and tasks from 30 days before and after today—stuff older than that, "
-                "you can’t really remember. "
-                f"Here are the user’s relevant schedules:\n\n{schedules_readable}\n\n"
-                f"Here’s a summary of new announcements (not seen till now):\n\n{summary_not_seen}\n\n"
-                f"Here’s a summary of older announcements the user already saw:\n\n{summary_seen}\n\n"
-                "Greet the user warmly and talk about their current tasks and announcements. "
-                "If they ask about other topics, you can chat briefly but keep the main focus on scheduling. "
-                "Keep the vibe casual, friendly, and helpful."
-                "Do not assume the user has nothing to do if it's not specified in their schedule."
-                "Don't add any text formatting like markdown, just plain text."
-                "Today's date is " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "."
-            )
+                    return jsonify({"chat_id": chat_id, "response": success_msg}), 200
 
-            # d) Generate a chat title using AI
-            chat_title = generate_chat_title(
-                user_info=user,
-                schedules_readable=schedules_readable,
-                not_seen_others_readable=summary_not_seen,
-                seen_others_readable=summary_seen,
-            )
+                else:
+                    # The LLM said "add_schedule" but didn't provide a complete date/time or title
+                    # We'll just say we couldn't parse it fully
+                    reply = "I see you're trying to schedule something, but I'm missing details. Could you clarify the date/time and name?"
+                    ai_msg = {"role": "assistant", "content": reply}
+                    add_message_to_chat(chat_id, ai_msg)
+                    conversation_history.append(ai_msg)
+                    return jsonify({"chat_id": chat_id, "response": reply}), 200
 
-            # e) Start conversation
-            conversation_history = [{"role": "system", "content": system_prompt}]
-            chat_data = {
-                "user_id": user_id,
-                "messages": conversation_history,
-                "title": chat_title,
-            }
-            chat_id = create_chat(chat_data)
+            elif intent == "update_schedule":
+                update_msg = actually_update_schedule(intent_result, user_id)
+                ai_msg = {"role": "assistant", "content": update_msg}
+                add_message_to_chat(chat_id, ai_msg)
+                conversation_history.append(ai_msg)
+                return jsonify({"chat_id": chat_id, "response": update_msg}), 200
 
-        # ----------------------
-        # 3) Append User Message
-        # ----------------------
-        user_message = {"role": "user", "content": prompt}
-        add_message_to_chat(chat_id, user_message)
-        conversation_history.append(user_message)
+            elif intent == "delete_schedule":
+                # new delete logic
+                msg = actually_delete_schedule(intent_result, user_id)
+                ai_msg = {"role": "assistant", "content": msg}
+                add_message_to_chat(chat_id, ai_msg)
+                conversation_history.append(ai_msg)
+                return jsonify({"chat_id": chat_id, "response": msg}), 200
 
-        # ----------------------
-        # 4) Proactive Trimming
-        # ----------------------
-        # Let's say we only want to keep the last 8 user+assistant messages in memory.
-        MAX_RECENT = 8
-
-        # Split system vs user/assistant messages
-        system_msgs = [m for m in conversation_history if m["role"] == "system"]
-        user_assistant_msgs = [
-            m for m in conversation_history if m["role"] in ["user", "assistant"]
-        ]
-
-        if len(user_assistant_msgs) > MAX_RECENT:
-            # a) We have older messages to summarize
-            older_count = len(user_assistant_msgs) - MAX_RECENT
-            older_chunk = user_assistant_msgs[:older_count]  # older messages
-            recent_chunk = user_assistant_msgs[older_count:]  # last 8
-
-            # b) Summarize that older chunk
-            summary_text = summarize_with_ai(older_chunk)
-
-            # c) Fetch existing summary
-            current_chat_doc = find_chat_by_id(chat_id)
-            existing_summary = current_chat_doc.get("summary_so_far") or ""
-
-            # d) Combine existing summary + new summary chunk
-            combined_summary = (
-                existing_summary + "\n\n" + summary_text
-                if existing_summary
-                else summary_text
-            )
-
-            # e) Store combined summary in the chat doc
-            store_summary_in_chat(chat_id, combined_summary)
-
-            # f) Rebuild conversation_history with system messages + last 8
-            conversation_history.clear()
-            conversation_history.extend(system_msgs)
-            conversation_history.extend(recent_chunk)
-
-        # ----------------------
-        # 5) Get AI Response
-        # ----------------------
-        # Now our conversation is short + we can call the AI
+        # 5) Normal LLM flow
+        maybe_proactive_trimming(chat_id, conversation_history)
         ai_response = get_ai_response(prompt, conversation_history)
 
-        # ----------------------
-        # 6) Append AI Message
-        # ----------------------
-        ai_message = {"role": "assistant", "content": ai_response}
-        add_message_to_chat(chat_id, ai_message)
-        conversation_history.append(ai_message)
+        # 6) Append AI message
+        ai_msg = {"role": "assistant", "content": ai_response}
+        add_message_to_chat(chat_id, ai_msg)
+        conversation_history.append(ai_msg)
 
-        return (
-            jsonify({"chat_id": chat_id, "response": ai_response, "title": chat_title}),
-            200,
-        )
+        return jsonify({"chat_id": chat_id, "response": ai_response}), 200
 
     except Exception as e:
+        print(e)
         return jsonify({"error": str(e)}), 500
 
 

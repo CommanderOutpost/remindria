@@ -29,11 +29,11 @@ def generate_chat_title(
         str: Generated chat title.
     """
     title_prompt = (
-        "Based on the following user information and schedules, create a short and descriptive title for this chat.\n\n"
+        "Based on the following user's first message, create a short and descriptive title for this chat.\n\n"
         f"User: {user_info['username']}\n"
-        f"Schedules: {schedules_readable}\n"
-        f"New Information: {not_seen_others_readable}\n"
-        f"Previously Discussed Information: {seen_others_readable}\n\n"
+        # f"Schedules: {schedules_readable}\n"
+        # f"New Information: {not_seen_others_readable}\n"
+        # f"Previously Discussed Information: {seen_others_readable}\n\n"
         "Title:"
     )
 
