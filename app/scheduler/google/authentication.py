@@ -25,7 +25,7 @@ def refresh_google_access_token(refresh_token, client_id, client_secret):
     """
     try:
         # if not refresh_token or not client_id or not client_secret:
-        #     raise 
+        #     raise
         # Create a credentials object with the refresh token
         creds = Credentials(
             token=None,
@@ -50,9 +50,7 @@ def refresh_google_access_token(refresh_token, client_id, client_secret):
         raise Exception(f"Failed to refresh token: {str(e)}")
 
 
-def exchange_auth_code_with_google(
-    auth_code, client_id, client_secret, redirect_uri, scopes
-):
+def exchange_auth_code_with_google(auth_code, client_id, client_secret, redirect_uri):
     """
     Exchanges an authorization code for access and refresh tokens using Google's library.
 
@@ -63,6 +61,17 @@ def exchange_auth_code_with_google(
     :return: A dictionary containing the access_token, refresh_token, and other data.
     :raises: Exception if the token exchange fails.
     """
+    scopes = [
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/classroom.courses.readonly",
+        "https://www.googleapis.com/auth/classroom.coursework.me",
+        "https://www.googleapis.com/auth/userinfo.profile",
+        "https://www.googleapis.com/auth/calendar.readonly",
+        "https://www.googleapis.com/auth/classroom.student-submissions.me.readonly",
+        "https://www.googleapis.com/auth/classroom.announcements.readonly",
+    ]
+
     # Configure the OAuth 2.0 flow
     flow = Flow.from_client_config(
         {

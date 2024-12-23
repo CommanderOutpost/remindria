@@ -1,6 +1,7 @@
 from db import db  # Import the initialized db object
 from bson.objectid import ObjectId
 from datetime import datetime, timezone, timedelta
+from pymongo.errors import PyMongoError
 
 # Collection reference
 schedule_collection = db["schedules"]
@@ -39,6 +40,7 @@ class ScheduleModel:
         schedule_date,
         recurrence=None,
         status="Pending",
+        event_id=None,
         created_at=None,
         updated_at=None,
     ):
@@ -59,6 +61,7 @@ class ScheduleModel:
         self.schedule_date = schedule_date  # Date and time for the reminder
         self.recurrence = recurrence  # None/Daily/Weekly/Monthly
         self.status = status  # Pending, Completed, Skipped
+        self.event_id = event_id  # Google Calendar event ID (if synced)
         self.created_at = created_at or datetime.now(timezone.utc)  # Creation timestamp
         self.updated_at = updated_at or datetime.now(
             timezone.utc
@@ -78,7 +81,8 @@ class ScheduleModel:
                 - "created_at" (datetime): The creation timestamp of the schedule.
                 - "updated_at" (datetime): The last update timestamp of the schedule.
         """
-        return {
+        schedule_dict = {
+            # Existing fields...
             "user_id": ObjectId(self.user_id),
             "reminder_message": self.reminder_message,
             "schedule_date": self.schedule_date,
@@ -87,6 +91,9 @@ class ScheduleModel:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
+        if self.event_id:
+            schedule_dict["event_id"] = self.event_id  # Add this line
+        return schedule_dict
 
 
 # Function to create a new schedule
@@ -164,12 +171,13 @@ def find_schedule_by_id(schedule_id):
 
 
 # Function to find all schedules for a user
-def find_schedules_by_user_id(user_id):
+def find_schedules_by_user_id(user_id, amount=None):
     """
-    Finds all schedules for a specific user.
+    Finds schedules for a specific user, with an optional limit on the number of schedules.
 
     Args:
         user_id (str): The ID of the user whose schedules need to be fetched.
+        amount (int, optional): The maximum number of schedules to fetch. If None, fetches all schedules.
 
     Returns:
         list: A list of schedule documents associated with the user.
@@ -183,8 +191,12 @@ def find_schedules_by_user_id(user_id):
         if not ObjectId.is_valid(user_id):
             raise ValueError(f"'{user_id}' is not a valid ObjectId.")
 
-        # Fetch all schedules for the user
-        schedules = list(schedule_collection.find({"user_id": ObjectId(user_id)}))
+        # Fetch schedules for the user with an optional limit
+        query = {"user_id": ObjectId(user_id)}
+        if amount is None:
+            schedules = list(schedule_collection.find(query))
+        else:
+            schedules = list(schedule_collection.find(query).limit(amount))
         return schedules
 
     except ValueError as ve:
@@ -251,6 +263,60 @@ def get_schedules_within_range(user_id, time_range, range_type="days"):
         raise ValueError(f"Validation Error: {ve}")
     except Exception as e:
         raise Exception(f"Failed to fetch schedules within range: {e}")
+
+
+def get_schedules_in_date_range(user_id, start_date, end_date):
+    """
+    Retrieves schedules for a specific user within a given date range.
+
+    Args:
+        user_id (str): The ID of the user whose schedules need to be fetched.
+        start_date (datetime): The start datetime of the range.
+        end_date (datetime): The end datetime of the range.
+
+    Returns:
+        list: A list of schedule documents within the specified date range.
+
+    Raises:
+        ValueError: If the provided user_id is not a valid ObjectId.
+        PyMongoError: If there is a database-related error.
+    """
+    try:
+        # Validate the user_id
+        if not ObjectId.is_valid(user_id):
+            raise ValueError(f"'{user_id}' is not a valid ObjectId.")
+
+        # Ensure start_date and end_date are timezone-aware and in UTC
+        if start_date.tzinfo is None:
+            start_date = start_date.replace(tzinfo=timezone.utc)
+        else:
+            start_date = start_date.astimezone(timezone.utc)
+
+        if end_date.tzinfo is None:
+            end_date = end_date.replace(tzinfo=timezone.utc)
+        else:
+            end_date = end_date.astimezone(timezone.utc)
+
+        # Fetch schedules within the date range for the user
+        schedules = list(
+            schedule_collection.find(
+                {
+                    "user_id": ObjectId(user_id),
+                    "schedule_date": {"$gte": start_date, "$lte": end_date},
+                }
+            ).sort(
+                "schedule_date", 1
+            )  # Optional: sort by schedule_date ascending
+        )
+
+        return schedules
+
+    except ValueError as ve:
+        raise ValueError(f"Validation Error: {ve}")
+    except PyMongoError as pe:
+        raise PyMongoError(f"Database Error: {pe}")
+    except Exception as e:
+        raise Exception(f"Failed to fetch schedules in date range: {e}")
 
 
 # Function to update a schedule by ID

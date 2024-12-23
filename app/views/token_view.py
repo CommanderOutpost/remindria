@@ -33,7 +33,7 @@ def add_token():
     Returns:
         JSON Response:
             - Success: {"message": "Token added successfully", "token_id": "string"}
-            - Error: {"error": "Token for this service already exists"}
+            - Success: {"message": "Token updated successfully"}
             - Error: {"error": "string"}
     """
     try:
@@ -41,6 +41,8 @@ def add_token():
         data = request.get_json()
         if not data:
             return jsonify({"error": "Request body is missing"}), 400
+
+        print(data)
 
         # Get the current user's ID from the JWT
         user_id = get_jwt_identity()
@@ -70,11 +72,7 @@ def add_token():
 
         # Check if a token already exists for this user and service
         existing_token = find_token_by_user_and_service(user_id, data["service_name"])
-        if existing_token:
-            # Throw an error if the token already exists
-            return (jsonify({"error": "Token for this service already exists"}), 400)
 
-        # Prepare the token data
         token_data = {
             "user_id": user_id,  # Use the authenticated user's ID
             "service_name": data["service_name"],
@@ -82,6 +80,19 @@ def add_token():
             "refresh_token": data.get("refresh_token", None),  # Optional field
             "token_expiry": token_expiry,  # Optional field
         }
+
+        if existing_token:
+            # Prepare updates by excluding 'user_id' and 'service_name'
+            updates = {
+                "access_token": data["access_token"],
+                "refresh_token": data.get("refresh_token"),
+                "token_expiry": token_expiry,
+            }
+
+            update_count = update_token(user_id, data["service_name"], updates)
+            if update_count == 0:
+                return jsonify({"error": "Failed to update existing token"}), 500
+            return jsonify({"message": "Token updated successfully"}), 200
 
         # Add the token
         token_id = create_token(token_data)
@@ -94,7 +105,6 @@ def add_token():
             ),
             201,
         )
-
     except InvalidId:
         return jsonify({"error": "Invalid user ID in JWT"}), 400
     except Exception as e:
@@ -214,9 +224,12 @@ def delete_token(service_name):
 
 
 @jwt_required()
-def add_google_classroom_access_and_refresh_token():
+def add_google_access_and_refresh_token(service_name):
     """
-    Adds a Google access and refresh token to the database
+    Adds a Google access and refresh token to the database for a specified Google service.
+
+    Args:
+        service_name (str): The name of the Google service (e.g., "google_classroom", "google_calendar").
 
     Request JSON Body:
         {
@@ -229,6 +242,8 @@ def add_google_classroom_access_and_refresh_token():
             - Success: {"message": "Token added successfully"}
             - Error: {"error": "string"}
     """
+    if service_name != "google_classroom" and service_name != "google_calendar":
+        return jsonify({"error": "Invalid service name"}), 400
 
     user_id = get_jwt_identity()
     if not user_id:
@@ -239,43 +254,51 @@ def add_google_classroom_access_and_refresh_token():
     if not data:
         return jsonify({"error": "Request body is missing"}), 400
 
-    # Get the authorization code from the request
+    # Get the authorization code and scopes from the request
     auth_code = data.get("code")
     if not auth_code:
         return jsonify({"error": "Authorization code is required"}), 400
 
-    scopes = data.get("scopes")
-    if not scopes:
-        return jsonify({"error": "Scopes are required"}), 400
+    # scopes = data.get("scopes")
+    # if not auth_code or not scopes:
+    #     return jsonify({"error": "Authorization code and scopes are required"}), 400
 
-    # Turn the scopes into a list
-    scopes = scopes.split(" ")
+    # Convert scopes string to a list
+    # scopes = scopes.split(" ")
 
     # Google OAuth 2.0 client ID and client secret
     client_id = config.GOOGLE_CLIENT_ID
     client_secret = config.GOOGLE_CLIENT_SECRET
-    redirect_uri = "http://localhost:8080"
+    redirect_uri = (
+        "http://127.0.0.1:5000"  # Ensure this matches your OAuth 2.0 settings
+    )
 
     try:
         # Exchange the authorization code for tokens
         tokens = exchange_auth_code_with_google(
-            auth_code, client_id, client_secret, redirect_uri, scopes
+            auth_code, client_id, client_secret, redirect_uri
         )
 
-        # Add the Google access and refresh token
+        # Prepare token data
         token_data = {
             "user_id": user_id,
-            "service_name": "google_classroom",
+            "service_name": service_name,
             "access_token": tokens["access_token"],
-            "refresh_token": tokens["refresh_token"],
+            "refresh_token": tokens.get("refresh_token"),
             "token_expiry": tokens["expiry"],
         }
 
-        # Check if service is already available for the user
-        existing_token = find_token_by_user_and_service(user_id, "google_classroom")
-        print(existing_token)
+        # Check if token already exists
+        existing_token = find_token_by_user_and_service(user_id, service_name)
         if existing_token:
-            modified_count = update_token(user_id, "google_classroom", token_data)
+            # Prepare updates by excluding 'user_id' and 'service_name'
+            updates = {
+                "access_token": tokens["access_token"],
+                "refresh_token": tokens.get("refresh_token"),
+                "token_expiry": tokens["expiry"],
+            }
+
+            modified_count = update_token(user_id, service_name, updates)
             if modified_count == 0:
                 return jsonify({"error": "Failed to update token"}), 500
             return (
@@ -288,6 +311,7 @@ def add_google_classroom_access_and_refresh_token():
                 200,
             )
 
+        # Create new token
         token_id = create_token(token_data)
         return (
             jsonify(
@@ -299,14 +323,18 @@ def add_google_classroom_access_and_refresh_token():
             201,
         )
 
+
     except Exception as e:
         return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
 
 
 @jwt_required()
-def refresh_google_classroom_access_token():
+def refresh_google_access_token_view(service_name):
     """
-    Refreshes the Google Classroom access token for the authenticated user.
+    Refreshes the Google access token for the specified service for the authenticated user.
+
+    Args:
+        service_name (str): The name of the Google service (e.g., "google_classroom", "google_calendar").
 
     Returns:
         JSON Response:
@@ -314,29 +342,22 @@ def refresh_google_classroom_access_token():
             - Error: {"error": "string"}
     """
     try:
-        # Get the current user's ID from the JWT
         user_id = get_jwt_identity()
         if not user_id:
             return jsonify({"error": "Unauthorized access"}), 401
 
-        # Find the existing Google Classroom token for the user
-        token = find_token_by_user_and_service(user_id, "google_classroom")
+        # Retrieve existing token
+        token = find_token_by_user_and_service(user_id, service_name)
         if not token:
-            return jsonify({"error": "Google Classroom token not found"}), 404
+            return jsonify({"error": f"{service_name} token not found"}), 404
 
-        # Check if a refresh token is available
         refresh_token = token.get("refresh_token")
         if not refresh_token:
-            return (
-                jsonify({"error": "No refresh token available for this service"}),
-                400,
-            )
+            return jsonify({"error": "No refresh token available"}), 400
 
-        # Google OAuth 2.0 client ID and client secret
+        # Refresh the token
         client_id = config.GOOGLE_CLIENT_ID
         client_secret = config.GOOGLE_CLIENT_SECRET
-
-        # Refresh the access token
         new_tokens = refresh_google_access_token(
             refresh_token, client_id, client_secret
         )
@@ -344,7 +365,7 @@ def refresh_google_classroom_access_token():
         # Update the token in the database
         update_token(
             user_id=user_id,
-            service_name="google_classroom",
+            service_name=service_name,
             updates={
                 "access_token": new_tokens["access_token"],
                 "token_expiry": new_tokens["expiry"],

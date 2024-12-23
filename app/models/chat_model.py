@@ -19,9 +19,19 @@ class ChatModel:
         updated_at (datetime): Timestamp when the chat was last updated.
     """
 
-    def __init__(self, user_id, messages=None, created_at=None, updated_at=None):
+    def __init__(
+        self,
+        user_id,
+        messages=None,
+        title=None,
+        summary_so_far=None,
+        created_at=None,
+        updated_at=None,
+    ):
         self.user_id = ObjectId(user_id)
         self.messages = messages or []
+        self.title = title
+        self.summary_so_far = summary_so_far
         self.created_at = created_at or datetime.now(timezone.utc)
         self.updated_at = updated_at or datetime.now(timezone.utc)
 
@@ -29,6 +39,8 @@ class ChatModel:
         return {
             "user_id": self.user_id,
             "messages": self.messages,
+            "title": self.title,
+            "summary_so_far": self.summary_so_far,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -90,6 +102,30 @@ def find_chats_by_user_id(user_id):
         raise Exception(f"Failed to find chats for user: {e}")
 
 
+def find_chats_by_user_id_after_date(user_id, date):
+    """
+    Finds all chats for a user after a given date and time.
+
+    Args:
+        user_id (str): The ID of the user.
+        date (datetime): The date and time to filter chats.
+
+    Returns:
+        list: List of chat documents.
+    """
+    try:
+        if not ObjectId.is_valid(user_id):
+            raise ValueError(f"'{user_id}' is not a valid ObjectId.")
+        chats = list(
+            chat_collection.find(
+                {"user_id": ObjectId(user_id), "updated_at": {"$gt": date}}
+            )
+        )
+        return chats
+    except Exception as e:
+        raise Exception(f"Failed to find chats for user after date: {e}")
+
+
 def add_message_to_chat(chat_id, message):
     """
     Adds a message to a chat's message history.
@@ -133,3 +169,24 @@ def delete_chat(chat_id):
         return delete_result.deleted_count
     except Exception as e:
         raise Exception(f"Failed to delete chat: {e}")
+
+
+def store_summary_in_chat(chat_id, summary):
+    """
+    Updates the 'summary_so_far' field with the new summary,
+    and also updates the 'updated_at' field.
+    """
+    try:
+        if not ObjectId.is_valid(chat_id):
+            raise ValueError(f"'{chat_id}' is not a valid ObjectId.")
+        chat_collection.update_one(
+            {"_id": ObjectId(chat_id)},
+            {
+                "$set": {
+                    "summary_so_far": summary,
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            },
+        )
+    except Exception as e:
+        raise Exception(f"Failed to store summary in chat: {e}")

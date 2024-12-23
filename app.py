@@ -1,6 +1,7 @@
-from flask import Flask
+from flask import Flask, g, request
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
+import time  # Import for tracking request time
 from app.routes.chat_routes import chat_routes
 from app.routes.schedule_routes import schedule_routes
 from app.routes.auth_routes import auth_routes
@@ -26,7 +27,29 @@ app.config.from_object(config)
 jwt = JWTManager(app)
 
 
+@app.before_request
+def start_timer():
+    """
+    Start a timer before handling a request.
+    """
+    g.start_time = time.time()
+
+
+@app.after_request
+def log_request(response):
+    """
+    Log the time taken to process a request and attach it to the response.
+    """
+    if hasattr(g, "start_time"):
+        elapsed_time = (time.time() - g.start_time) * 1000  # Convert to ms
+        # Log the method, path, status code, and time taken
+        print(
+            f" {elapsed_time:.2f}ms"
+        )
+    return response
+
+
 if __name__ == "__main__":
     if config.FLASK_ENV == "production":
         app.run()
-    app.run(debug=True)
+    app.run(debug=False)

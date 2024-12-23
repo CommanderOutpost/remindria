@@ -17,6 +17,7 @@ class Config:
     FLASK_ENV = os.getenv("FLASK_ENV") or "production"
     GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
     GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+    OPENAI_MODEL = os.getenv("OPENAI_MODEL")
 
 
 config = Config()

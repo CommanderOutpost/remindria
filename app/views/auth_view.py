@@ -1,7 +1,8 @@
 from flask import request, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import create_access_token, create_refresh_token
-from app.models.user_model import create_user, user_collection
+from app.models.user_model import create_user, find_user_by_id, user_collection
+from flask_jwt_extended import jwt_required, get_jwt_identity
 
 
 def signup():
@@ -114,3 +115,35 @@ def login():
 
     except Exception as e:
         return jsonify({"error": f"Failed to log in: {e}"}), 500
+
+
+@jwt_required()
+def get_user():
+    """
+    Retrieves the user details for the authenticated user.
+
+    Returns:
+        JSON response with the user details on success.
+        JSON response with an error message on failure.
+    """
+    try:
+        # Get the authenticated user's ID
+        user_id = get_jwt_identity()
+        if not user_id:
+            return jsonify({"error": "User not authenticated"}), 401
+
+        # Find the user by ID
+        user = find_user_by_id(user_id)
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        # Remove password from user data
+        user.pop("password", None)
+
+        # Serialize ObjectId field for JSON
+        user_serialized = {**user, "_id": str(user["_id"])}
+
+        return jsonify({"user": user_serialized}), 200
+
+    except Exception as e:
+        return jsonify({"error": f"Failed to retrieve user: {e}"}), 500
