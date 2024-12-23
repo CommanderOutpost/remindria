@@ -52,4 +52,4 @@ def log_request(response):
 if __name__ == "__main__":
     if config.FLASK_ENV == "production":
         app.run()
-    app.run(debug=False)
+    app.run(debug=True)
