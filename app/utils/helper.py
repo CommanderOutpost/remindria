@@ -145,103 +145,158 @@ def parse_natural_language_instructions(
 ) -> Optional[Dict[str, Any]]:
     """
     Parses the entire conversation history to determine if the user intends
-    to create a schedule. If so, extracts schedule details.
+    to create or update a schedule (or neither).
 
-    Args:
-        conversation_history (List[Dict[str, str]]): List of messages in the conversation.
-            Each message is a dict with 'role' and 'content' keys.
-
-    Returns:
-        Optional[Dict[str, Any]]: A dictionary with schedule details or None if no schedule intent is detected.
+    Possible return structures:
+      - For new schedule:
+        {
+          "intent": "add_schedule",
+          "schedule_title": "Event Title",
+          "start_time": <datetime>,
+          "end_time": <datetime or None>
+        }
+      - For updating an existing schedule:
+        {
+          "intent": "update_schedule",
+          "schedule_identifier": "Name or ID of schedule to update",
+          "new_title": <str or None>,
+          "new_start_time": <datetime or None>,
+          "new_end_time": <datetime or None>
+        }
+      - For deleting an existing schedule:
+        {
+          "intent": "delete_schedule",
+          "schedule_identifier": "Name or ID of schedule to delete"
+        }
+      - None (if no schedule intent).
     """
+
     system_prompt = (
         "You are a helper that reads the entire conversation below. "
-        "If the user is requesting to create a schedule, unify all references to date/time and event name. "
-        "Do not output anything apart from the JSON format below. Not an explanation, not anything, just the JSON.\n"
-        "Output JSON with this format:\n\n"
+        "If the user is requesting to create a schedule, unify references to date/time and event name. "
+        "If the user wants to update an existing schedule, identify which schedule the user refers to "
+        "If the user wants to delete an existing schedule, identify which schedule the user refers to "
+        "and unify references to new date/time or new title. "
+        "Output JSON in one of these two formats:\n\n"
+        "1) For creating a schedule:\n"
         "{\n"
         '  "intent": "add_schedule",\n'
         '  "schedule_title": "Event Title",\n'
         '  "start_time": "YYYY-MM-DD HH:MM:SS",\n'
         '  "end_time": "YYYY-MM-DD HH:MM:SS" // optional\n'
-        "}\n"
-        "If the user is NOT asking to create a schedule, or you lack enough info, just return 'null'."
+        "}\n\n"
+        "2) For updating a schedule:\n"
+        "{\n"
+        '  "intent": "update_schedule",\n'
+        '  "schedule_identifier": "existing schedule name",\n'
+        '  "new_title": "Updated Title" // optional,\n'
+        '  "new_start_time": "YYYY-MM-DD HH:MM:SS" // optional,\n'
+        '  "new_end_time": "YYYY-MM-DD HH:MM:SS" // optional\n'
+        "}\n\n"
+        "3) For deleting a schedule:\n"
+        "{\n"
+        '  "intent": "delete_schedule",\n'
+        '  "schedule_identifier": "existing schedule name"\n'
+        "}\n\n"
+        "If the user is NOT asking to create or update a schedule, or you lack enough info, just return 'null'."
         "NEVER assume a title or date/time. For example if the user says 'I need a schedule by 8pm today.' "
         "Don't think the title is 'Event Title' until the user says so."
-        "Return 'null' until every detail is clearly mentioned." 
+        "NEVER update a schedule without the AI asking the user to confirm and the user agreeing to the change."
+        "NEVER delete a schedule without the AI asking the user to confirm and the user agreeing to the deletion."
+        "Return 'null' until every detail is clearly mentioned."
     )
 
-    # Build messages for the LLM
-    messages = [
-        {"role": "system", "content": system_prompt},
-    ]
-    # Include the entire conversation
+    # Build the prompt for the LLM with your entire conversation:
+    messages = [{"role": "system", "content": system_prompt}]
     for msg in conversation_history:
         messages.append({"role": msg["role"], "content": msg["content"]})
 
-    # Call the OpenAI model
     try:
         response = openai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
             temperature=0,
-            max_tokens=300,
+            max_tokens=400,
         )
     except Exception as e:
         print(f"OpenAI error: {e}")
         return None
 
     ai_text = response.choices[0].message.content.strip()
-
-    # Debug: Print the raw AI response
-    print("Raw AI Response:")
-    print(ai_text)
+    print("Raw AI Response:\n", ai_text)
 
     # Extract JSON from the AI response
     json_str = extract_json_from_text(ai_text)
     if not json_str:
-        print("No JSON found in the AI response.")
         return None
 
-    # Attempt to parse the JSON
+    # Attempt to parse
     try:
         parsed = json.loads(json_str)
     except json.JSONDecodeError as e:
         print(f"JSON decode error: {e}")
         return None
 
-    # Validate the intent
-    if parsed.get("intent") != "add_schedule":
-        print(f"Unexpected intent value: {parsed.get('intent')}")
-        return None
+    # If it's "add_schedule"
+    if parsed.get("intent") == "add_schedule":
+        start_dt = parse_datetime(parsed.get("start_time", ""))
+        end_dt = (
+            parse_datetime(parsed.get("end_time", ""))
+            if parsed.get("end_time")
+            else None
+        )
+        if not start_dt:
+            print("No valid start_time found.")
+            return None
 
-    # Parse datetime strings
-    def parse_datetime(dt_str: str) -> Optional[datetime]:
-        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%m/%d/%Y %H:%M"):
-            try:
-                return datetime.strptime(dt_str, fmt)
-            except ValueError:
-                continue
-        print(f"Unrecognized datetime format: {dt_str}")
-        return None
+        return {
+            "intent": "add_schedule",
+            "schedule_title": parsed.get("schedule_title", ""),
+            "start_time": start_dt,
+            "end_time": end_dt,
+        }
 
-    start_dt = parse_datetime(parsed.get("start_time", "")) or None
-    end_dt = parse_datetime(parsed.get("end_time", "")) or None
+    # If it's "update_schedule"
+    elif parsed.get("intent") == "update_schedule":
+        schedule_id = parsed.get("schedule_identifier", "")
+        new_title = parsed.get("new_title")
+        new_start = (
+            parse_datetime(parsed.get("new_start_time", ""))
+            if parsed.get("new_start_time")
+            else None
+        )
+        new_end = (
+            parse_datetime(parsed.get("new_end_time", ""))
+            if parsed.get("new_end_time")
+            else None
+        )
 
-    # Ensure start_time was parsed successfully
-    if not start_dt:
-        print("Invalid or missing start_time format.")
-        return None
+        if not schedule_id and not new_title and not new_start and not new_end:
+            print("No update info provided.")
+            return None
 
-    # Construct the final dictionary
-    schedule = {
-        "intent": parsed["intent"],
-        "schedule_title": parsed.get("schedule_title", ""),
-        "start_time": start_dt,
-        "end_time": end_dt,
-    }
+        return {
+            "intent": "update_schedule",
+            "schedule_identifier": schedule_id,
+            "new_title": new_title,
+            "new_start_time": new_start,
+            "new_end_time": new_end,
+        }
+        
+    # If it's "delete_schedule"
+    elif parsed.get("intent") == "delete_schedule":
+        schedule_id = parsed.get("schedule_identifier", "")
+        if not schedule_id:
+            print("No schedule_id found.")
+            return None
 
-    return schedule
+        return {
+            "intent": "delete_schedule",
+            "schedule_identifier": schedule_id,
+        }
+
+    # Otherwise, no recognized schedule intent
+    return None
 
 
 def extract_json_from_text(text: str) -> Optional[str]:
@@ -337,4 +392,18 @@ def parse_a_datetime(user_input: str):
     """
 
     dt = dateparser.parse(user_input)
+    return dt
+
+
+def parse_datetime(dt_str: str) -> Optional[datetime]:
+    """
+    Attempt to parse a datetime from string. Return None if fails.
+    """
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%m/%d/%Y %H:%M"):
+        try:
+            return datetime.strptime(dt_str, fmt)
+        except ValueError:
+            continue
+    # fallback to dateparser
+    dt = dateparser.parse(dt_str)
     return dt

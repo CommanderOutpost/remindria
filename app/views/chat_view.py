@@ -14,7 +14,12 @@ from app.models.chat_model import (
 )
 from app.views.schedule_view import get_30_day_schedules_for_user
 from app.views.other_view import fetch_and_summarize_others
-from app.models.schedule_model import create_schedule
+from app.models.schedule_model import (
+    create_schedule,
+    update_schedule as update_schedule_model,
+    find_schedules_by_user_id,
+    delete_schedule as delete_schedule_model,
+)
 from app.utils.helper import (
     format_schedule_human_readable,
     parse_natural_language_instructions,  # We'll modify to accept conversation
@@ -50,6 +55,8 @@ def create_new_chat_with_system_prompt(user_id, user):
         "Greet the user warmly and talk about their current tasks and announcements. "
         "Keep the vibe casual and helpful. "
         "If the user asks to create a schedule, ask for all info needed to create it. Ask for only date and time and name for now. "
+        "If the user asks to update a schedule, ask for the schedule they want to update and the information they want to change. "
+        "After finding out what the user wants to update and with what, always ask for confirmation. "
         "Today's date is " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "."
     )
 
@@ -70,6 +77,9 @@ def create_new_chat_with_system_prompt(user_id, user):
         "messages": conversation_history,
         "title": chat_title,
     }
+
+    print("DEBUG chat_data:", chat_data)
+
     new_chat_id = create_chat(chat_data)
     return conversation_history, chat_title, new_chat_id
 
@@ -159,6 +169,78 @@ def actually_create_schedule(schedule_data, user_id):
     return created_id, f"Done! I've created the schedule '{title}' for {disp_time}."
 
 
+def actually_update_schedule(schedule_data, user_id):
+    """
+    schedule_data might look like:
+    {
+      "schedule_identifier": "Doctor Appointment",
+      "new_title": "Doc Appt Updated",  # or None
+      "new_start_time": datetime(...)   # or None
+      "new_end_time": datetime(...)     # or None
+    }
+
+    We'll find the user's schedule whose reminder_message matches schedule_identifier,
+    and then apply the updates.
+    """
+    identifier = schedule_data["schedule_identifier"]
+    new_title = schedule_data.get("new_title")
+    new_start = schedule_data.get("new_start_time")
+    new_end = schedule_data.get("new_end_time")  # optional if you store it in DB
+
+    # 1) Find schedule by name
+    all_schedules = find_schedules_by_user_id(user_id)
+    matching = [s for s in all_schedules if s.get("reminder_message") == identifier]
+    if not matching:
+        return f"Could not find a schedule named '{identifier}' to update."
+
+    # If multiple found, handle or just pick first
+    sched_to_update = matching[0]
+    schedule_id = str(sched_to_update["_id"])
+
+    # 2) Build updates
+    updates = {}
+    if new_title:
+        updates["reminder_message"] = new_title
+    if new_start:
+        updates["schedule_date"] = new_start
+    # If you want to store new_end_time, you'd do something like:
+    # updates["end_date"] = new_end
+
+    if not updates:
+        return "No new changes provided."
+
+    # 3) Perform update
+    count = update_schedule_model(schedule_id, updates)
+    if count == 0:
+        return f"Failed to update schedule '{identifier}'."
+    return f"Successfully updated schedule '{identifier}'."
+
+
+def actually_delete_schedule(schedule_data, user_id):
+    """
+    schedule_data looks like:
+    {
+      "schedule_identifier": "Doctor Appointment"
+    }
+    We'll find the user's schedule whose reminder_message matches schedule_identifier,
+    and then delete it.
+    """
+    identifier = schedule_data["schedule_identifier"]
+    all_schedules = find_schedules_by_user_id(user_id)
+    matching = [s for s in all_schedules if s.get("reminder_message") == identifier]
+    if not matching:
+        return f"Could not find a schedule named '{identifier}' to delete."
+
+    sched_to_delete = matching[0]
+    schedule_id = str(sched_to_delete["_id"])
+
+    # Perform the delete
+    deleted_count = delete_schedule_model(schedule_id)
+    if deleted_count == 0:
+        return f"Failed to delete schedule '{identifier}'."
+    return f"Successfully deleted schedule '{identifier}'."
+
+
 @jwt_required()
 def chat():
     """
@@ -194,37 +276,54 @@ def chat():
         # 3) Let the LLM parse the entire conversation to see if there's a schedule request
         intent_result = parse_natural_language_instructions(conversation_history)
         # If you want, you could do: parse_natural_language_instructions(conversation_history, "Look for schedule creation")
-        if intent_result and intent_result.get("intent") == "add_schedule":
-            # 4) We got a schedule creation request
-            # Gather the data from intent_result
-            schedule_title = intent_result["schedule_title"]
-            start_dt = intent_result["start_time"]
-            end_dt = intent_result["end_time"]
+        if intent_result:
+            intent = intent_result.get("intent")
+            if intent == "add_schedule":
+                # 4) We got a schedule creation request
+                # Gather the data from intent_result
+                schedule_title = intent_result["schedule_title"]
+                start_dt = intent_result["start_time"]
+                end_dt = intent_result["end_time"]
 
-            if schedule_title and start_dt:
-                created_id, success_msg = actually_create_schedule(
-                    {
-                        "title": schedule_title,
-                        "start_time": start_dt,
-                        "end_time": end_dt,
-                    },
-                    user_id,
-                )
-                # Add assistant message with success
-                ai_msg = {"role": "assistant", "content": success_msg}
+                if schedule_title and start_dt:
+                    created_id, success_msg = actually_create_schedule(
+                        {
+                            "title": schedule_title,
+                            "start_time": start_dt,
+                            "end_time": end_dt,
+                        },
+                        user_id,
+                    )
+                    # Add assistant message with success
+                    ai_msg = {"role": "assistant", "content": success_msg}
+                    add_message_to_chat(chat_id, ai_msg)
+                    conversation_history.append(ai_msg)
+
+                    return jsonify({"chat_id": chat_id, "response": success_msg}), 200
+
+                else:
+                    # The LLM said "add_schedule" but didn't provide a complete date/time or title
+                    # We'll just say we couldn't parse it fully
+                    reply = "I see you're trying to schedule something, but I'm missing details. Could you clarify the date/time and name?"
+                    ai_msg = {"role": "assistant", "content": reply}
+                    add_message_to_chat(chat_id, ai_msg)
+                    conversation_history.append(ai_msg)
+                    return jsonify({"chat_id": chat_id, "response": reply}), 200
+
+            elif intent == "update_schedule":
+                update_msg = actually_update_schedule(intent_result, user_id)
+                ai_msg = {"role": "assistant", "content": update_msg}
                 add_message_to_chat(chat_id, ai_msg)
                 conversation_history.append(ai_msg)
+                return jsonify({"chat_id": chat_id, "response": update_msg}), 200
 
-                return jsonify({"chat_id": chat_id, "response": success_msg}), 200
-
-            else:
-                # The LLM said "add_schedule" but didn't provide a complete date/time or title
-                # We'll just say we couldn't parse it fully
-                reply = "I see you're trying to schedule something, but I'm missing details. Could you clarify the date/time and name?"
-                ai_msg = {"role": "assistant", "content": reply}
+            elif intent == "delete_schedule":
+                # new delete logic
+                msg = actually_delete_schedule(intent_result, user_id)
+                ai_msg = {"role": "assistant", "content": msg}
                 add_message_to_chat(chat_id, ai_msg)
                 conversation_history.append(ai_msg)
-                return jsonify({"chat_id": chat_id, "response": reply}), 200
+                return jsonify({"chat_id": chat_id, "response": msg}), 200
 
         # 5) Normal LLM flow
         maybe_proactive_trimming(chat_id, conversation_history)
@@ -238,6 +337,7 @@ def chat():
         return jsonify({"chat_id": chat_id, "response": ai_response}), 200
 
     except Exception as e:
+        print(e)
         return jsonify({"error": str(e)}), 500
 
 
