@@ -27,6 +27,7 @@ class ChatModel:
         summary_so_far=None,
         pending_schedule=None,
         pending_schedule_step=None,
+        conversation_type="chat",
         created_at=None,
         updated_at=None,
     ):
@@ -36,6 +37,7 @@ class ChatModel:
         self.summary_so_far = summary_so_far
         self.pending_schedule = pending_schedule or {}
         self.pending_schedule_step = pending_schedule_step or None
+        self.conversation_type = conversation_type
         self.created_at = created_at or datetime.now(timezone.utc)
         self.updated_at = updated_at or datetime.now(timezone.utc)
 
@@ -47,6 +49,7 @@ class ChatModel:
             "summary_so_far": self.summary_so_far,
             "pending_schedule": self.pending_schedule,
             "pending_schedule_step": self.pending_schedule_step,
+            "conversation_type": self.conversation_type,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }

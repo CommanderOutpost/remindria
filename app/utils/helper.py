@@ -172,42 +172,41 @@ def parse_natural_language_instructions(
     """
 
     system_prompt = (
-        "You are a helper that reads the entire conversation below. "
-        "If the user is requesting to create a schedule, unify references to date/time and event name. "
-        "If the user wants to update an existing schedule, identify which schedule the user refers to "
-        "If the user wants to delete an existing schedule, identify which schedule the user refers to "
-        "and unify references to new date/time or new title. "
-        "Output JSON in one of these two formats:\n\n"
-        "1) For creating a schedule:\n"
-        "{\n"
-        '  "intent": "add_schedule",\n'
-        '  "schedule_title": "Event Title",\n'
-        '  "start_time": "YYYY-MM-DD HH:MM:SS",\n'
-        '  "end_time": "YYYY-MM-DD HH:MM:SS" // optional\n'
-        "}\n\n"
-        "2) For updating a schedule:\n"
-        "{\n"
-        '  "intent": "update_schedule",\n'
-        '  "schedule_identifier": "existing schedule name",\n'
-        '  "new_title": "Updated Title" // optional,\n'
-        '  "new_start_time": "YYYY-MM-DD HH:MM:SS" // optional,\n'
-        '  "new_end_time": "YYYY-MM-DD HH:MM:SS" // optional\n'
-        "}\n\n"
-        "3) For deleting a schedule:\n"
-        "{\n"
-        '  "intent": "delete_schedule",\n'
-        '  "schedule_identifier": "existing schedule name"\n'
-        "}\n\n"
-        "If the user is NOT asking to create or update a schedule, or you lack enough info, just return 'null'."
-        "NEVER assume a title or date/time. For example if the user says 'I need a schedule by 8pm today.' "
-        "Don't think the title is 'Event Title' until the user says so."
-        "NEVER update a schedule without the AI asking the user to confirm and the user agreeing to the change."
-        "NEVER delete a schedule without the AI asking the user to confirm and the user agreeing to the deletion."
-        "Return 'null' until every detail is clearly mentioned."
+        "You are a strict schedule-intent parser. You do NOT chat. You do NOT explain. "
+        "You ONLY read the entire conversation below to see if the user wants to create, update, or delete a schedule. "
+        "\n\n"
+        "Output EXACTLY one of the following:\n\n"
+        "1) JSON for creating a schedule:\n"
+        "   {\n"
+        '     "intent": "add_schedule",\n'
+        '     "schedule_title": "Event Title",\n'
+        '     "start_time": "YYYY-MM-DD HH:MM:SS",\n'
+        '     "end_time": "YYYY-MM-DD HH:MM:SS"  // optional\n'
+        "   }\n\n"
+        "2) JSON for updating a schedule:\n"
+        "   {\n"
+        '     "intent": "update_schedule",\n'
+        '     "schedule_identifier": "existing schedule name",\n'
+        '     "new_title": "Updated Title" // optional,\n'
+        '     "new_start_time": "YYYY-MM-DD HH:MM:SS" // optional,\n'
+        '     "new_end_time": "YYYY-MM-DD HH:MM:SS" // optional\n'
+        "   }\n\n"
+        "3) JSON for deleting a schedule:\n"
+        "   {\n"
+        '     "intent": "delete_schedule",\n'
+        '     "schedule_identifier": "existing schedule name"\n'
+        "   }\n\n"
+        "4) The word 'null' (as a string) if no schedule creation, update, or delete is recognized.\n\n"
+        "IMPORTANT:\n"
+        "- You MUST NOT produce any other text or explanation.\n"
+        "- If there's no schedule-intent, or data is incomplete, output 'null' ONLY.\n"
+        "- You do not greet or thank or respond with any text besides the JSON or 'null'.\n"
+        "- You do NOT wrap JSON in code fences. You do NOT add extra commentary. Either valid JSON or 'null'."
     )
 
     # Build the prompt for the LLM with your entire conversation:
     messages = [{"role": "system", "content": system_prompt}]
+    print(messages)
     for msg in conversation_history:
         messages.append({"role": msg["role"], "content": msg["content"]})
 
@@ -282,7 +281,7 @@ def parse_natural_language_instructions(
             "new_start_time": new_start,
             "new_end_time": new_end,
         }
-        
+
     # If it's "delete_schedule"
     elif parsed.get("intent") == "delete_schedule":
         schedule_id = parsed.get("schedule_identifier", "")

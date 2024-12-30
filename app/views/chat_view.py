@@ -31,7 +31,7 @@ from app.ai.caller import (
 )
 
 
-def create_new_chat_with_system_prompt(user_id, user):
+def create_new_chat_with_system_prompt(user_id, user, conversation_type="chat"):
     """
     Creates a new chat doc with a system prompt tailored to the user's schedule & announcements.
     Returns: (conversation_history, chat_title, new_chat_id)
@@ -44,21 +44,45 @@ def create_new_chat_with_system_prompt(user_id, user):
         schedules_readable = "No tasks or reminders for the past or upcoming 30 days."
 
     summary_not_seen, summary_seen = fetch_and_summarize_others(user_id)
+    
+    print(conversation_type)
 
-    # Build system prompt
-    system_prompt = (
-        "You’re Remindria, a friendly buddy who helps users manage their schedules. "
-        "You talk in a casual, approachable style. Focus on tasks from 30 days before and after today. "
-        f"Here are the user’s relevant schedules:\n\n{schedules_readable}\n\n"
-        f"Here’s a summary of new announcements:\n\n{summary_not_seen}\n\n"
-        f"Here’s a summary of older announcements:\n\n{summary_seen}\n\n"
-        "Greet the user warmly and talk about their current tasks and announcements. "
-        "Keep the vibe casual and helpful. "
-        "If the user asks to create a schedule, ask for all info needed to create it. Ask for only date and time and name for now. "
-        "If the user asks to update a schedule, ask for the schedule they want to update and the information they want to change. "
-        "After finding out what the user wants to update and with what, always ask for confirmation. "
-        "Today's date is " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "."
-    )
+    if conversation_type == "call":
+        system_prompt = (
+            "You are Remindria, speaking with the user on a phone call. "
+            "You respond verbally, as though you're talking in real time. "
+            "Use casual, friendly language like 'Hey there!' or 'Sure thing!' and keep the tone upbeat. "
+            "Focus on scheduling tasks from 30 days before and after today. If the user wants to create, update, or delete a schedule, do so. "
+            "But do it in a phone-conversation style—like you're actually speaking. "
+            "\n\n"
+            f"By the way, here's some background on the user's existing schedules:\n"
+            f"{schedules_readable}\n\n"
+            f"And here are recent announcements:\n{summary_not_seen}\n\n"
+            f"Older announcements:\n{summary_seen}\n\n"
+            "Ask clarifying questions if you need more details from the user. "
+            "If the user asks to create a schedule, ask for all info needed to create it. Ask for only date and time and name for now. "
+            "If the user asks to update a schedule, ask for the schedule they want to update and the information they want to change. "
+            "If the user asks to delete a schedule, ask for the schedule they want to delete. "
+            "Remember, you're speaking out loud—no code blocks or disclaimers. Just a friendly call. "
+            "Today's date is " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "."
+        )
+
+    else:
+        # Build system prompt
+        system_prompt = (
+            "You’re Remindria, a friendly buddy who helps users manage their schedules. "
+            "You talk in a casual, approachable style. Focus on tasks from 30 days before and after today. "
+            f"Here are the user’s relevant schedules:\n\n{schedules_readable}\n\n"
+            f"Here’s a summary of new announcements:\n\n{summary_not_seen}\n\n"
+            f"Here’s a summary of older announcements:\n\n{summary_seen}\n\n"
+            "Greet the user warmly and talk about their current tasks and announcements. "
+            "Keep the vibe casual and helpful. "
+            "If the user asks to create a schedule, ask for all info needed to create it. Ask for only date and time and name for now. "
+            "If the user asks to update a schedule, ask for the schedule they want to update and the information they want to change. "
+            "If the user asks to delete a schedule, ask for the schedule they want to delete. "
+            "After finding out what the user wants to update and with what, always ask for confirmation. "
+            "Today's date is " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "."
+        )
 
     # Generate chat title
     chat_title = generate_chat_title(
@@ -76,6 +100,7 @@ def create_new_chat_with_system_prompt(user_id, user):
         "user_id": user_id,
         "messages": conversation_history,
         "title": chat_title,
+        "conversation_type": conversation_type,
     }
 
     print("DEBUG chat_data:", chat_data)
@@ -84,7 +109,7 @@ def create_new_chat_with_system_prompt(user_id, user):
     return conversation_history, chat_title, new_chat_id
 
 
-def get_or_create_chat(user_id, data):
+def get_or_create_chat(user_id, data, conversation_type="chat"):
     """
     If chat_id is provided, fetch that chat from DB.
     If not, create a new chat with system prompt.
@@ -103,7 +128,7 @@ def get_or_create_chat(user_id, data):
 
     # Otherwise create new
     conversation_history, chat_title, new_id = create_new_chat_with_system_prompt(
-        user_id, user
+        user_id, user, conversation_type
     )
     return {}, conversation_history, chat_title, new_id
 
@@ -263,9 +288,11 @@ def chat():
             return jsonify({"error": "Prompt is required"}), 400
         prompt = data["prompt"]
 
+        conversation_type = data.get("type", "chat")
+        
         # 1) Load or create chat
         chat_doc, conversation_history, chat_title, chat_id = get_or_create_chat(
-            user_id, data
+            user_id, data, conversation_type
         )
         if conversation_history is None:
             return jsonify({"error": "Chat not found or unauthorized"}), 404
