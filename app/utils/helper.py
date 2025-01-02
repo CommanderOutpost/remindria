@@ -6,7 +6,6 @@ import re
 from typing import Optional, Dict, Any, List
 import dateparser
 
-
 openai_client = OpenAI()
 
 
@@ -141,7 +140,7 @@ def clean_google_announcement_text(text):
 
 
 def parse_natural_language_instructions(
-    conversation_history: List[Dict[str, str]]
+    conversation_history: List[Dict[str, str]], schedules
 ) -> Optional[Dict[str, Any]]:
     """
     Parses the entire conversation history to determine if the user intends
@@ -171,6 +170,8 @@ def parse_natural_language_instructions(
       - None (if no schedule intent).
     """
 
+    print(schedules)
+
     system_prompt = (
         "You are a strict schedule-intent parser. You do NOT chat. You do NOT explain. "
         "You ONLY read the entire conversation below to see if the user wants to create, update, or delete a schedule. "
@@ -187,6 +188,7 @@ def parse_natural_language_instructions(
         "   {\n"
         '     "intent": "update_schedule",\n'
         '     "schedule_identifier": "existing schedule name",\n'
+        '     "existing_start_time": "YYYY-MM-DD HH:MM:SS",\n'  # New field
         '     "new_title": "Updated Title" // optional,\n'
         '     "new_start_time": "YYYY-MM-DD HH:MM:SS" // optional,\n'
         '     "new_end_time": "YYYY-MM-DD HH:MM:SS" // optional\n'
@@ -194,7 +196,8 @@ def parse_natural_language_instructions(
         "3) JSON for deleting a schedule:\n"
         "   {\n"
         '     "intent": "delete_schedule",\n'
-        '     "schedule_identifier": "existing schedule name"\n'
+        '     "schedule_identifier": "existing schedule name",\n'
+        '     "existing_start_time": "YYYY-MM-DD HH:MM:SS"\n'
         "   }\n\n"
         "4) The word 'null' (as a string) if no schedule creation, update, or delete is recognized.\n\n"
         "IMPORTANT:\n"
@@ -202,13 +205,19 @@ def parse_natural_language_instructions(
         "- If there's no schedule-intent, or data is incomplete, output 'null' ONLY.\n"
         "- You do not greet or thank or respond with any text besides the JSON or 'null'.\n"
         "- You do NOT wrap JSON in code fences. You do NOT add extra commentary. Either valid JSON or 'null'."
+        f"Schedules we are working with are: {schedules}"
     )
 
     # Build the prompt for the LLM with your entire conversation:
     messages = [{"role": "system", "content": system_prompt}]
-    print(messages)
+
     for msg in conversation_history:
-        messages.append({"role": msg["role"], "content": msg["content"]})
+        if msg["role"] != "system":
+            messages.append({"role": msg["role"], "content": msg["content"]})
+
+    print("\n\n\n\n\n")
+    print(messages)
+    print("\n\n\n\n\n")
 
     try:
         response = openai_client.chat.completions.create(
@@ -222,6 +231,7 @@ def parse_natural_language_instructions(
         return None
 
     ai_text = response.choices[0].message.content.strip()
+    print("\n\n\n\n")
     print("Raw AI Response:\n", ai_text)
 
     # Extract JSON from the AI response
@@ -258,39 +268,44 @@ def parse_natural_language_instructions(
     # If it's "update_schedule"
     elif parsed.get("intent") == "update_schedule":
         schedule_id = parsed.get("schedule_identifier", "")
+        existing_start_str = parsed.get("existing_start_time", "")
         new_title = parsed.get("new_title")
-        new_start = (
-            parse_datetime(parsed.get("new_start_time", ""))
-            if parsed.get("new_start_time")
-            else None
-        )
+        new_start_str = parsed.get("new_start_time", "")
         new_end = (
             parse_datetime(parsed.get("new_end_time", ""))
             if parsed.get("new_end_time")
             else None
         )
 
-        if not schedule_id and not new_title and not new_start and not new_end:
+        existing_start_dt = parse_datetime(existing_start_str)
+        new_start_dt = parse_datetime(new_start_str)
+
+        if not schedule_id and not new_title and not new_start_dt and not new_end:
             print("No update info provided.")
             return None
 
         return {
             "intent": "update_schedule",
             "schedule_identifier": schedule_id,
+            "existing_start_time": existing_start_dt,
             "new_title": new_title,
-            "new_start_time": new_start,
+            "new_start_time": new_start_dt,
             "new_end_time": new_end,
         }
 
     # If it's "delete_schedule"
     elif parsed.get("intent") == "delete_schedule":
         schedule_id = parsed.get("schedule_identifier", "")
+        existing_start_str = parsed.get("existing_start_time", "")
         if not schedule_id:
             print("No schedule_id found.")
             return None
 
+        existing_start_dt = parse_datetime(existing_start_str)
+
         return {
             "intent": "delete_schedule",
+            "existing_start_time": existing_start_dt,
             "schedule_identifier": schedule_id,
         }
 
@@ -406,3 +421,19 @@ def parse_datetime(dt_str: str) -> Optional[datetime]:
     # fallback to dateparser
     dt = dateparser.parse(dt_str)
     return dt
+
+
+def extract_speak_block(text: str) -> str:
+    """
+    Extracts only the first <speak>...</speak> block from 'text' and returns it.
+    Removes any content before or after that block.
+
+    If no <speak> block is found, returns an empty string.
+    """
+    # Regex to capture the <speak>...some content...</speak> block
+    pattern = re.compile(r"(<speak>.*?</speak>)", re.DOTALL | re.IGNORECASE)
+    match = pattern.search(text)
+    if match:
+        return match.group(1)  # entire <speak>...</speak> block
+    else:
+        return ""  # or return None, depending on your needs

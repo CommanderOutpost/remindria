@@ -319,6 +319,44 @@ def get_schedules_in_date_range(user_id, start_date, end_date):
         raise Exception(f"Failed to fetch schedules in date range: {e}")
 
 
+def find_schedule_by_name_and_datetime(user_id, reminder_message, schedule_date):
+    """
+    Finds a schedule that belongs to the given user,
+    has the specified reminder_message,
+    and exactly matches the schedule_date (datetime).
+
+    Args:
+        user_id (str): The ID of the user.
+        reminder_message (str): The schedule name or reminder_message we are looking for.
+        schedule_date (datetime): The original date/time of the schedule.
+
+    Returns:
+        dict: The schedule document if found, or None if none match.
+    """
+    try:
+        # 1) Validate user_id
+        if not ObjectId.is_valid(user_id):
+            raise ValueError(f"'{user_id}' is not a valid ObjectId.")
+
+        # 2) Make sure we have a valid datetime
+        if not isinstance(schedule_date, datetime):
+            raise ValueError("'schedule_date' must be a valid datetime object.")
+
+        # 3) Query
+        schedule = schedule_collection.find_one(
+            {
+                "user_id": ObjectId(user_id),
+                "reminder_message": reminder_message,
+                "schedule_date": schedule_date,
+            }
+        )
+
+        return schedule  # could be None if not found
+
+    except Exception as e:
+        raise Exception(f"Failed to find schedule by name & datetime: {str(e)}")
+
+
 # Function to update a schedule by ID
 def update_schedule(schedule_id, updates):
     """
