@@ -16,13 +16,15 @@ from app.views.schedule_view import get_30_day_schedules_for_user
 from app.views.other_view import fetch_and_summarize_others
 from app.models.schedule_model import (
     create_schedule,
-    update_schedule as update_schedule_model,
+    find_schedule_by_name_and_datetime,
+    update_schedule,
     find_schedules_by_user_id,
-    delete_schedule as delete_schedule_model,
+    delete_schedule
 )
 from app.utils.helper import (
     format_schedule_human_readable,
     parse_natural_language_instructions,  # We'll modify to accept conversation
+    extract_speak_block,
 )
 from app.ai.caller import (
     get_ai_response,
@@ -31,13 +33,14 @@ from app.ai.caller import (
 )
 
 
-def create_new_chat_with_system_prompt(user_id, user):
+def create_new_chat_with_system_prompt(user_id, user, conversation_type="chat"):
     """
     Creates a new chat doc with a system prompt tailored to the user's schedule & announcements.
     Returns: (conversation_history, chat_title, new_chat_id)
     """
     # Summaries
     schedules = get_30_day_schedules_for_user(user_id)
+    print(schedules)
     if schedules:
         schedules_readable = format_schedule_human_readable({"schedules": schedules})
     else:
@@ -45,20 +48,51 @@ def create_new_chat_with_system_prompt(user_id, user):
 
     summary_not_seen, summary_seen = fetch_and_summarize_others(user_id)
 
-    # Build system prompt
-    system_prompt = (
-        "You’re Remindria, a friendly buddy who helps users manage their schedules. "
-        "You talk in a casual, approachable style. Focus on tasks from 30 days before and after today. "
-        f"Here are the user’s relevant schedules:\n\n{schedules_readable}\n\n"
-        f"Here’s a summary of new announcements:\n\n{summary_not_seen}\n\n"
-        f"Here’s a summary of older announcements:\n\n{summary_seen}\n\n"
-        "Greet the user warmly and talk about their current tasks and announcements. "
-        "Keep the vibe casual and helpful. "
-        "If the user asks to create a schedule, ask for all info needed to create it. Ask for only date and time and name for now. "
-        "If the user asks to update a schedule, ask for the schedule they want to update and the information they want to change. "
-        "After finding out what the user wants to update and with what, always ask for confirmation. "
-        "Today's date is " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "."
-    )
+    if conversation_type == "call":
+        system_prompt = (
+            "You are Remindria, speaking with the user on a phone call. "
+            "You respond verbally, as though you're talking in real time, and you must produce SSML markup for speech synthesis. "
+            "Use casual, friendly language like <prosody pitch='+10%' rate='fast'>“Hey there!”</prosody> or <prosody pitch='+15%' rate='fast'>“Sure thing!”</prosody>, "
+            "and keep the tone upbeat. "
+            "\n\n"
+            "IMPORTANT RULES:\n"
+            "1) **All** your output must be valid SSML within a single <speak>...</speak> block.\n"
+            "2) Do **not** provide code fences (```).\n"
+            "3) You can use the following SSML features for realism:\n"
+            "   - <prosody> for pitch/rate changes\n"
+            "   - <break> to insert natural pauses\n"
+            "   - <emphasis> to highlight key words\n"
+            "   - volume/pitch variations for emotional effect\n"
+            "4) Focus on scheduling tasks from 30 days before and after today. If the user wants to create, update, or delete a schedule, do so in this phone conversation style.\n"
+            "5) Always ask clarifying questions if details are missing.\n"
+            "6) Always confirm changes (create/update/delete) before finalizing them.\n"
+            "7) No disclaimers, no code blocks—only SSML.\n"
+            "8) Assume the user can handle the SSML output directly in a TTS engine.\n\n"
+            f"By the way, here's some background on the user's existing schedules:\n"
+            f"{schedules_readable}\n\n"
+            f"And here are recent announcements:\n{summary_not_seen}\n\n"
+            f"Older announcements:\n{summary_seen}\n\n"
+            "Again, respond **only** with SSML in a <speak>...</speak> block. No extraneous text. "
+            "After finding out what the user wants to create, update or delete and with what, ALWAYS ALWAYS ask for confirmation. "
+            "Today's date is " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "."
+        )
+
+    else:
+        # Build system prompt
+        system_prompt = (
+            "You’re Remindria, a friendly buddy who helps users manage their schedules. "
+            "You talk in a casual, approachable style. Focus on tasks from 30 days before and after today. "
+            f"Here are the user’s relevant schedules:\n\n{schedules_readable}\n\n"
+            f"Here’s a summary of new announcements:\n\n{summary_not_seen}\n\n"
+            f"Here’s a summary of older announcements:\n\n{summary_seen}\n\n"
+            "Greet the user warmly and talk about their current tasks and announcements. "
+            "Keep the vibe casual and helpful. "
+            "If the user asks to create a schedule, ask for all info needed to create it. Ask for only date and time and name for now. "
+            "If the user asks to update a schedule, ask for the schedule they want to update and the information they want to change. "
+            "If the user asks to delete a schedule, ask for the schedule they want to delete. "
+            "After finding out what the user wants to create, update or delete and with what, ALWAYS ALWAYS ask for confirmation. "
+            "Today's date is " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "."
+        )
 
     # Generate chat title
     chat_title = generate_chat_title(
@@ -76,15 +110,16 @@ def create_new_chat_with_system_prompt(user_id, user):
         "user_id": user_id,
         "messages": conversation_history,
         "title": chat_title,
+        "conversation_type": conversation_type,
     }
 
-    print("DEBUG chat_data:", chat_data)
+    # print("DEBUG chat_data:", chat_data)
 
     new_chat_id = create_chat(chat_data)
-    return conversation_history, chat_title, new_chat_id
+    return conversation_history, chat_title, new_chat_id, schedules
 
 
-def get_or_create_chat(user_id, data):
+def get_or_create_chat(user_id, data, conversation_type="chat"):
     """
     If chat_id is provided, fetch that chat from DB.
     If not, create a new chat with system prompt.
@@ -99,13 +134,13 @@ def get_or_create_chat(user_id, data):
         chat = find_chat_by_id(chat_id)
         if not chat or str(chat["user_id"]) != user_id:
             return None, None, None, None
-        return chat, chat["messages"], chat["title"], chat_id
+        return chat, chat["messages"], chat["title"], chat_id, None
 
     # Otherwise create new
-    conversation_history, chat_title, new_id = create_new_chat_with_system_prompt(
-        user_id, user
+    conversation_history, chat_title, new_id, schedules = (
+        create_new_chat_with_system_prompt(user_id, user, conversation_type)
     )
-    return {}, conversation_history, chat_title, new_id
+    return {}, conversation_history, chat_title, new_id, schedules
 
 
 def append_user_message(chat_id, conversation_history, user_prompt):
@@ -171,74 +206,72 @@ def actually_create_schedule(schedule_data, user_id):
 
 def actually_update_schedule(schedule_data, user_id):
     """
-    schedule_data might look like:
+    Example schedule_data structure:
     {
       "schedule_identifier": "Doctor Appointment",
-      "new_title": "Doc Appt Updated",  # or None
-      "new_start_time": datetime(...)   # or None
-      "new_end_time": datetime(...)     # or None
+      "existing_start_time": <datetime>,
+      "new_title": "Doc Appt Updated",   # optional
+      "new_start_time": <datetime or None>,
+      "new_end_time": <datetime or None> # optional
     }
-
-    We'll find the user's schedule whose reminder_message matches schedule_identifier,
-    and then apply the updates.
     """
+    print(schedule_data)
     identifier = schedule_data["schedule_identifier"]
+    existing_start_dt = schedule_data.get("existing_start_time")
     new_title = schedule_data.get("new_title")
     new_start = schedule_data.get("new_start_time")
-    new_end = schedule_data.get("new_end_time")  # optional if you store it in DB
+    new_end = schedule_data.get("new_end_time")  # optional if you store end_time
 
-    # 1) Find schedule by name
-    all_schedules = find_schedules_by_user_id(user_id)
-    matching = [s for s in all_schedules if s.get("reminder_message") == identifier]
-    if not matching:
-        return f"Could not find a schedule named '{identifier}' to update."
+    # 1) Find the schedule doc by name + date/time
+    schedule_doc = find_schedule_by_name_and_datetime(user_id, identifier, existing_start_dt)
+    if not schedule_doc:
+        return f"Could not find a schedule named '{identifier}' at {existing_start_dt} to update."
 
-    # If multiple found, handle or just pick first
-    sched_to_update = matching[0]
-    schedule_id = str(sched_to_update["_id"])
+    schedule_id = str(schedule_doc["_id"])
 
+    print(schedule_id)
     # 2) Build updates
     updates = {}
     if new_title:
         updates["reminder_message"] = new_title
     if new_start:
         updates["schedule_date"] = new_start
-    # If you want to store new_end_time, you'd do something like:
-    # updates["end_date"] = new_end
+    # if new_end -> store if your schema has that field, or ignore
 
     if not updates:
         return "No new changes provided."
 
-    # 3) Perform update
-    count = update_schedule_model(schedule_id, updates)
+    # 3) Perform the update using the existing model function
+    count = update_schedule(schedule_id, updates)
     if count == 0:
-        return f"Failed to update schedule '{identifier}'."
-    return f"Successfully updated schedule '{identifier}'."
+        return f"Failed to update schedule '{identifier}' at {existing_start_dt}."
+    return f"Successfully updated schedule '{identifier}' (originally at {existing_start_dt})."
 
 
 def actually_delete_schedule(schedule_data, user_id):
     """
-    schedule_data looks like:
+    Example schedule_data structure:
     {
-      "schedule_identifier": "Doctor Appointment"
+      "schedule_identifier": "Doctor Appointment",
+      "existing_start_time": <datetime>
     }
-    We'll find the user's schedule whose reminder_message matches schedule_identifier,
-    and then delete it.
     """
+    print(schedule_data)
     identifier = schedule_data["schedule_identifier"]
-    all_schedules = find_schedules_by_user_id(user_id)
-    matching = [s for s in all_schedules if s.get("reminder_message") == identifier]
-    if not matching:
-        return f"Could not find a schedule named '{identifier}' to delete."
+    existing_start_dt = schedule_data.get("existing_start_time")
 
-    sched_to_delete = matching[0]
-    schedule_id = str(sched_to_delete["_id"])
+    # 1) Find the schedule doc
+    schedule_doc = find_schedule_by_name_and_datetime(user_id, identifier, existing_start_dt)
+    if not schedule_doc:
+        return f"Could not find a schedule named '{identifier}' at {existing_start_dt} to delete."
 
-    # Perform the delete
-    deleted_count = delete_schedule_model(schedule_id)
+    schedule_id = str(schedule_doc["_id"])
+
+    # 2) Delete using the existing function
+    deleted_count = delete_schedule(schedule_id)
     if deleted_count == 0:
-        return f"Failed to delete schedule '{identifier}'."
-    return f"Successfully deleted schedule '{identifier}'."
+        return f"Failed to delete schedule '{identifier}' at {existing_start_dt}."
+    return f"Successfully deleted schedule '{identifier}' originally at {existing_start_dt}."
 
 
 @jwt_required()
@@ -263,9 +296,11 @@ def chat():
             return jsonify({"error": "Prompt is required"}), 400
         prompt = data["prompt"]
 
+        conversation_type = data.get("type", "chat")
+
         # 1) Load or create chat
-        chat_doc, conversation_history, chat_title, chat_id = get_or_create_chat(
-            user_id, data
+        chat_doc, conversation_history, chat_title, chat_id, schedules = (
+            get_or_create_chat(user_id, data, conversation_type)
         )
         if conversation_history is None:
             return jsonify({"error": "Chat not found or unauthorized"}), 404
@@ -274,7 +309,9 @@ def chat():
         append_user_message(chat_id, conversation_history, prompt)
 
         # 3) Let the LLM parse the entire conversation to see if there's a schedule request
-        intent_result = parse_natural_language_instructions(conversation_history)
+        intent_result = parse_natural_language_instructions(
+            conversation_history, schedules
+        )
         # If you want, you could do: parse_natural_language_instructions(conversation_history, "Look for schedule creation")
         if intent_result:
             intent = intent_result.get("intent")
@@ -329,12 +366,23 @@ def chat():
         maybe_proactive_trimming(chat_id, conversation_history)
         ai_response = get_ai_response(prompt, conversation_history)
 
+        if conversation_type == "call":
+            cleaned_response = extract_speak_block(ai_response)
+            if not cleaned_response:
+                # fallback if no <speak> found
+                cleaned_response = ai_response
+            final_ai_msg = cleaned_response
+            print(final_ai_msg)
+        else:
+            # normal chat, no SSML cleaning
+            final_ai_msg = ai_response
+
         # 6) Append AI message
-        ai_msg = {"role": "assistant", "content": ai_response}
+        ai_msg = {"role": "assistant", "content": final_ai_msg}
         add_message_to_chat(chat_id, ai_msg)
         conversation_history.append(ai_msg)
 
-        return jsonify({"chat_id": chat_id, "response": ai_response}), 200
+        return jsonify({"chat_id": chat_id, "response": final_ai_msg}), 200
 
     except Exception as e:
         print(e)
