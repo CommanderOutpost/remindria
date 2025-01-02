@@ -206,11 +206,12 @@ def delete_other(other_id):
         return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
 
 
-def fetch_and_summarize_others(user_id):
+def fetch_and_summarize_others(user_id, char_limit=300000):
     """
     Fetches all 'others' for a user. Summarizes separately:
       1) Not-seen items
       2) Already seen items
+    Only summarizes if the combined text exceeds a character count limit.
     Returns two summaries:
       - summary_not_seen
       - summary_seen
@@ -230,13 +231,22 @@ def fetch_and_summarize_others(user_id):
     if not_seen:
         texts_not_seen = [o["content"] for o in not_seen]
         combined_text_not_seen = "\n\n".join(texts_not_seen)
-        prompt_not_seen = (
-            "Summarize the following new announcements in a friendly, casual style:\n\n"
-            + combined_text_not_seen
-        )
-        summary_not_seen = summarize_with_ai(
-            [{"role": "user", "content": prompt_not_seen}]
-        )
+
+        print("Not seen length: ", len(combined_text_not_seen))
+        print()
+
+        # Only summarize if combined text exceeds the character limit
+        if len(combined_text_not_seen) > char_limit:
+            prompt_not_seen = (
+                "Summarize the following new announcements in a friendly, casual style:\n\n"
+                + combined_text_not_seen
+            )
+            summary_not_seen = summarize_with_ai(
+                [{"role": "user", "content": prompt_not_seen}]
+            )
+        else:
+            summary_not_seen = combined_text_not_seen
+
         # Now mark them as seen
         set_seen_to_true([str(o["_id"]) for o in not_seen])
     else:
@@ -248,11 +258,17 @@ def fetch_and_summarize_others(user_id):
     if seen:
         texts_seen = [o["content"] for o in seen]
         combined_text_seen = "\n\n".join(texts_seen)
-        prompt_seen = (
-            "Summarize the following older announcements (already seen by the user) in a friendly way:\n\n"
-            + combined_text_seen
-        )
-        summary_seen = summarize_with_ai([{"role": "user", "content": prompt_seen}])
+
+        # Only summarize if combined text exceeds the character limit
+        if len(combined_text_seen) > char_limit:
+            print("Text seen:", len(combined_text_seen))
+            prompt_seen = (
+                "Summarize the following older announcements (already seen by the user) in a friendly way:\n\n"
+                + combined_text_seen
+            )
+            summary_seen = summarize_with_ai([{"role": "user", "content": prompt_seen}])
+        else:
+            summary_seen = combined_text_seen
     else:
         summary_seen = "No previously known announcements."
 

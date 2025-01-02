@@ -40,7 +40,7 @@ def create_new_chat_with_system_prompt(user_id, user, conversation_type="chat"):
     """
     # Summaries
     schedules = get_30_day_schedules_for_user(user_id)
-    print(schedules)
+    
     if schedules:
         schedules_readable = format_schedule_human_readable({"schedules": schedules})
     else:
