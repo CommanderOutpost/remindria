@@ -42,8 +42,6 @@ def add_token():
         if not data:
             return jsonify({"error": "Request body is missing"}), 400
 
-        print(data)
-
         # Get the current user's ID from the JWT
         user_id = get_jwt_identity()
         if not user_id:

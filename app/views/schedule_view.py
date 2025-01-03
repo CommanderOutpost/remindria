@@ -5,7 +5,6 @@ from app.models.schedule_model import (
     create_schedule,
     find_schedules_by_user_id,
     find_schedule_by_id,
-    get_schedules_within_range,
     get_schedules_in_date_range,
     update_schedule as update_schedule_model,
     delete_schedule as delete_schedule_model,

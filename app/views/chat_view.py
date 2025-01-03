@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime
 from flask import request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
@@ -19,28 +19,30 @@ from app.models.schedule_model import (
     find_schedule_by_name_and_datetime,
     update_schedule,
     find_schedules_by_user_id,
-    delete_schedule
+    delete_schedule,
 )
 from app.utils.helper import (
     format_schedule_human_readable,
-    parse_natural_language_instructions,  # We'll modify to accept conversation
     extract_speak_block,
 )
 from app.ai.caller import (
     get_ai_response,
     summarize_with_ai,
     generate_chat_title,
+    parse_natural_language_instructions,
 )
 
 
-def create_new_chat_with_system_prompt(user_id, user, conversation_type="chat"):
+def create_new_chat_with_system_prompt(
+    user_id, user, conversation_type="chat", language="English"
+):
     """
     Creates a new chat doc with a system prompt tailored to the user's schedule & announcements.
     Returns: (conversation_history, chat_title, new_chat_id)
     """
     # Summaries
     schedules = get_30_day_schedules_for_user(user_id)
-    
+
     if schedules:
         schedules_readable = format_schedule_human_readable({"schedules": schedules})
     else:
@@ -74,6 +76,7 @@ def create_new_chat_with_system_prompt(user_id, user, conversation_type="chat"):
             f"Older announcements:\n{summary_seen}\n\n"
             "Again, respond **only** with SSML in a <speak>...</speak> block. No extraneous text. "
             "After finding out what the user wants to create, update or delete and with what, ALWAYS ALWAYS ask for confirmation. "
+            f"The current language is {language}. You must speak in this language."
             "Today's date is " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "."
         )
 
@@ -95,12 +98,14 @@ def create_new_chat_with_system_prompt(user_id, user, conversation_type="chat"):
         )
 
     # Generate chat title
-    chat_title = generate_chat_title(
-        user_info=user,
-        schedules_readable=schedules_readable,
-        not_seen_others_readable=summary_not_seen,
-        seen_others_readable=summary_seen,
-    )
+    # chat_title = generate_chat_title(
+    #     user_info=user,
+    #     schedules_readable=schedules_readable,
+    #     not_seen_others_readable=summary_not_seen,
+    #     seen_others_readable=summary_seen,
+    # )
+
+    chat_title = "Chat with Remindria"
 
     # Start conversation with system message
     conversation_history = [{"role": "system", "content": system_prompt}]
@@ -113,13 +118,11 @@ def create_new_chat_with_system_prompt(user_id, user, conversation_type="chat"):
         "conversation_type": conversation_type,
     }
 
-    # print("DEBUG chat_data:", chat_data)
-
     new_chat_id = create_chat(chat_data)
     return conversation_history, chat_title, new_chat_id, schedules
 
 
-def get_or_create_chat(user_id, data, conversation_type="chat"):
+def get_or_create_chat(user_id, data, conversation_type="chat", language="English"):
     """
     If chat_id is provided, fetch that chat from DB.
     If not, create a new chat with system prompt.
@@ -138,7 +141,7 @@ def get_or_create_chat(user_id, data, conversation_type="chat"):
 
     # Otherwise create new
     conversation_history, chat_title, new_id, schedules = (
-        create_new_chat_with_system_prompt(user_id, user, conversation_type)
+        create_new_chat_with_system_prompt(user_id, user, conversation_type, language)
     )
     return {}, conversation_history, chat_title, new_id, schedules
 
@@ -215,7 +218,6 @@ def actually_update_schedule(schedule_data, user_id):
       "new_end_time": <datetime or None> # optional
     }
     """
-    print(schedule_data)
     identifier = schedule_data["schedule_identifier"]
     existing_start_dt = schedule_data.get("existing_start_time")
     new_title = schedule_data.get("new_title")
@@ -223,13 +225,14 @@ def actually_update_schedule(schedule_data, user_id):
     new_end = schedule_data.get("new_end_time")  # optional if you store end_time
 
     # 1) Find the schedule doc by name + date/time
-    schedule_doc = find_schedule_by_name_and_datetime(user_id, identifier, existing_start_dt)
+    schedule_doc = find_schedule_by_name_and_datetime(
+        user_id, identifier, existing_start_dt
+    )
     if not schedule_doc:
         return f"Could not find a schedule named '{identifier}' at {existing_start_dt} to update."
 
     schedule_id = str(schedule_doc["_id"])
 
-    print(schedule_id)
     # 2) Build updates
     updates = {}
     if new_title:
@@ -256,12 +259,13 @@ def actually_delete_schedule(schedule_data, user_id):
       "existing_start_time": <datetime>
     }
     """
-    print(schedule_data)
     identifier = schedule_data["schedule_identifier"]
     existing_start_dt = schedule_data.get("existing_start_time")
 
     # 1) Find the schedule doc
-    schedule_doc = find_schedule_by_name_and_datetime(user_id, identifier, existing_start_dt)
+    schedule_doc = find_schedule_by_name_and_datetime(
+        user_id, identifier, existing_start_dt
+    )
     if not schedule_doc:
         return f"Could not find a schedule named '{identifier}' at {existing_start_dt} to delete."
 
@@ -297,10 +301,11 @@ def chat():
         prompt = data["prompt"]
 
         conversation_type = data.get("type", "chat")
+        language = data.get("language", "English")
 
         # 1) Load or create chat
         chat_doc, conversation_history, chat_title, chat_id, schedules = (
-            get_or_create_chat(user_id, data, conversation_type)
+            get_or_create_chat(user_id, data, conversation_type, language)
         )
         if conversation_history is None:
             return jsonify({"error": "Chat not found or unauthorized"}), 404
@@ -372,7 +377,6 @@ def chat():
                 # fallback if no <speak> found
                 cleaned_response = ai_response
             final_ai_msg = cleaned_response
-            print(final_ai_msg)
         else:
             # normal chat, no SSML cleaning
             final_ai_msg = ai_response
@@ -385,7 +389,6 @@ def chat():
         return jsonify({"chat_id": chat_id, "response": final_ai_msg}), 200
 
     except Exception as e:
-        print(e)
         return jsonify({"error": str(e)}), 500
 
 

@@ -232,9 +232,6 @@ def fetch_and_summarize_others(user_id, char_limit=300000):
         texts_not_seen = [o["content"] for o in not_seen]
         combined_text_not_seen = "\n\n".join(texts_not_seen)
 
-        print("Not seen length: ", len(combined_text_not_seen))
-        print()
-
         # Only summarize if combined text exceeds the character limit
         if len(combined_text_not_seen) > char_limit:
             prompt_not_seen = (
@@ -261,7 +258,6 @@ def fetch_and_summarize_others(user_id, char_limit=300000):
 
         # Only summarize if combined text exceeds the character limit
         if len(combined_text_seen) > char_limit:
-            print("Text seen:", len(combined_text_seen))
             prompt_seen = (
                 "Summarize the following older announcements (already seen by the user) in a friendly way:\n\n"
                 + combined_text_seen

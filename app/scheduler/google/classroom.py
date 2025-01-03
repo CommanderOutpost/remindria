@@ -112,8 +112,6 @@ def get_recent_announcements(access_token, minutes=10):
             course_name = course["name"]
             course_id = course["id"]
 
-            print(course_name)
-
             # Retrieve the announcements for the course
             announcements_result = (
                 service.courses().announcements().list(courseId=course_id).execute()
@@ -121,7 +119,6 @@ def get_recent_announcements(access_token, minutes=10):
             announcements = announcements_result.get("announcements", [])
 
             for announcement in announcements:
-                print(announcement)
                 creation_time_str = announcement.get("creationTime")
                 creation_time = datetime.fromisoformat(
                     creation_time_str.replace("Z", "+00:00")
