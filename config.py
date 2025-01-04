@@ -5,7 +5,6 @@ from datetime import timedelta
 # Load environment variables from .env file
 load_dotenv()
 
-
 class Config:
     MONGO_HOST = os.getenv("MONGO_HOST")
     MONGO_PORT = int(os.getenv("MONGO_PORT"))
@@ -20,4 +19,16 @@ class Config:
     OPENAI_MODEL = os.getenv("OPENAI_MODEL")
 
 
-config = Config()
+class DevelopmentConfig(Config):
+    DEBUG = True
+
+
+class ProductionConfig(Config):
+    DEBUG = False
+
+
+config = (
+    DevelopmentConfig()
+    if os.getenv("FLASK_ENV") == "development"
+    else ProductionConfig()
+)

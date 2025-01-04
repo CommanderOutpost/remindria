@@ -43,13 +43,12 @@ def log_request(response):
     if hasattr(g, "start_time"):
         elapsed_time = (time.time() - g.start_time) * 1000  # Convert to ms
         # Log the method, path, status code, and time taken
-        print(
-            f" {elapsed_time:.2f}ms"
-        )
+        print(f" {elapsed_time:.2f}ms")
     return response
 
 
 if __name__ == "__main__":
-    if config.FLASK_ENV == "production":
+    if app.config["FLASK_ENV"] == "production":
         app.run()
-    app.run(debug=True)
+    else:
+        app.run(debug=True)
