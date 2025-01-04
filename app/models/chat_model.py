@@ -1,11 +1,17 @@
 # app/models/chat_model.py
 
-from db import db
+from db import db, get_collection
 from bson.objectid import ObjectId
 from datetime import datetime, timezone
 
 # Collection reference
-chat_collection = db["chats"]
+chat_collection = get_collection(
+    "chats",
+    indexes=[
+        [("user_id", 1)],  # Index on user_id for faster lookups
+        [("updated_at", -1)],  # Index on updated_at for sorting
+    ],
+)
 
 
 class ChatModel:

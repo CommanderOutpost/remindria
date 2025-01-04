@@ -1,7 +1,13 @@
-from db import db  # Import the initialized db object
+from db import db, get_collection  # Import the initialized db object
 
 # Collection reference
-voice_settings_collection = db["voice_settings"]
+voice_settings_collection = get_collection(
+    "voice_settings",
+    indexes=[
+        [("name", 1)],
+        [("language", 1)],
+    ],
+)
 
 
 # VoiceSettings schema

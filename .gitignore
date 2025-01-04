@@ -4,3 +4,5 @@ project_planning/
 *__pycache__/
 print.txt
 *.json
+logs/
+locustfile.py

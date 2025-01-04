@@ -2,7 +2,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 import tiktoken
 import json
-from app.utils.helper import extract_json_from_text, parse_datetime
+from app.utils.helper import extract_json_from_text, parse_datetime, extract_speak_block
 from config import config
 from typing import Optional, Dict, Any, List
 
@@ -107,6 +107,87 @@ def get_ai_response(prompt, conversation_history, model="gpt-4o-mini"):
     conversation_history.append({"role": "assistant", "content": ai_response})
 
     return ai_response
+
+
+def generate_action_response(
+    action_type: str,
+    success: bool,
+    schedule_info: Dict[str, Any],
+    conversation_history: List[Dict[str, str]],
+    conversation_type: str = "chat",
+    model: str = "gpt-4o-mini",
+) -> str:
+    """
+    Calls the LLM to generate a user-facing response message after a schedule action
+    (create/update/delete) either succeeded or failed.
+
+    Args:
+        action_type (str): "create", "update", or "delete"
+        success (bool): Indicates if the action was successful
+        schedule_info (dict): Info about the schedule (title, date/time, etc.)
+        conversation_history (list): The conversation so far, or minimal context
+                                     the AI might need (if you want it).
+        conversation_type (str): "chat" or "call". If "call", produce SSML.
+        model (str): The model name.
+
+    Returns:
+        str: The AI-generated message to the user about the action result.
+    """
+
+    # Shared basics for both chat/call
+    base_instructions = (
+        f"You are Remindria, a friendly scheduling assistant.\n"
+        f"You have just performed a(n) {action_type.upper()} action on a schedule.\n"
+        f"Success = {success}.\n"
+        f"Schedule Info = {schedule_info}.\n\n"
+    )
+
+    if conversation_type == "call":
+        # For phone-call style => produce SSML
+        system_prompt = (
+            "You must produce your entire response in valid SSML inside a single <speak>...</speak> block. "
+            "Use friendly, casual language. Possibly use <prosody> or <break> for variety. "
+            "No disclaimers or code blocks. Just SSML.\n\n"
+            + base_instructions
+            + "Generate a short summary of what happened with this schedule action. "
+            "If success, you can say something upbeat; if fail, politely mention the issue. "
+            "But always respond in SSML.\n"
+            "You can use the following SSML features for realism:\n"
+            "   - <prosody> for pitch/rate changes\n"
+            "   - <break> to insert natural pauses\n"
+            "   - <emphasis> to highlight key words\n"
+            "   - volume/pitch variations for emotional effect\n"
+        )
+    else:
+        # Normal chat => plain text
+        system_prompt = (
+            "You are Remindria, a friendly scheduling assistant. "
+            "You have just performed an action on a schedule (create, update, or delete). "
+            "Please produce a short, user-facing message in plain text. "
+            "No disclaimers or code blocks.\n\n"
+            + base_instructions
+            + "Generate a short summary of what happened with this schedule action. "
+            "If success, you can say something upbeat; if fail, mention the problem.\n"
+        )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        # If you want to pass existing conversation context, you could do so here:
+        # for msg in conversation_history: messages.append(msg)
+    ]
+
+    response = openai_client.chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=0,
+        max_tokens=200,
+    )
+
+    ai_text = response.choices[0].message.content.strip()
+    if conversation_type == "call":
+        ai_text = extract_speak_block(ai_text)
+        
+    return ai_text
 
 
 def summarize_with_ai(conversation_history):

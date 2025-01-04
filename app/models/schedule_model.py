@@ -1,10 +1,17 @@
-from db import db  # Import the initialized db object
+from db import db, get_collection  # Import the initialized db object
 from bson.objectid import ObjectId
 from datetime import datetime, timezone, timedelta
 from pymongo.errors import PyMongoError
 
 # Collection reference
-schedule_collection = db["schedules"]
+schedule_collection = get_collection(
+    "schedules",
+    indexes=[
+        [("user_id", 1)],  # Index for filtering by user_id
+        [("schedule_date", 1)],  # Index for filtering by schedule_date
+    ],
+)
+
 
 
 # Schedule schema

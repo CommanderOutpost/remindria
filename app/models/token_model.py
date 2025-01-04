@@ -1,10 +1,17 @@
 from config import config
-from db import db
+from db import db, get_collection
 from bson.objectid import ObjectId
 from datetime import datetime, timezone
 
 # Collection reference
-tokens_collection = db["tokens"]
+tokens_collection = get_collection(
+    "tokens",
+    indexes=[
+        [("user_id", 1)],  # Index for filtering by user_id
+        [("service_name", 1)],  # Index for filtering by service_name
+    ],
+)
+
 
 
 class TokenModel:

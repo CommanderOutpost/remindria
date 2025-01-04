@@ -1,4 +1,5 @@
 from datetime import datetime
+from bson import ObjectId
 from flask import request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
@@ -26,11 +27,13 @@ from app.utils.helper import (
     extract_speak_block,
 )
 from app.ai.caller import (
+    generate_action_response,
     get_ai_response,
     summarize_with_ai,
     generate_chat_title,
     parse_natural_language_instructions,
 )
+from bson.errors import InvalidId
 
 
 def create_new_chat_with_system_prompt(
@@ -131,12 +134,12 @@ def get_or_create_chat(user_id, data, conversation_type="chat", language="Englis
     chat_id = data.get("chat_id")
     user = find_user_by_id(user_id)
     if not user:
-        return None, None, None, None
+        return None, None, None, None, None
 
     if chat_id:
         chat = find_chat_by_id(chat_id)
         if not chat or str(chat["user_id"]) != user_id:
-            return None, None, None, None
+            return None, None, None, None, None
         return chat, chat["messages"], chat["title"], chat_id, None
 
     # Otherwise create new
@@ -186,72 +189,136 @@ def maybe_proactive_trimming(chat_id, conversation_history):
         conversation_history.extend(recent_chunk)
 
 
-def actually_create_schedule(schedule_data, user_id):
+def actually_create_schedule(
+    schedule_data, user_id, conversation_history=None, conversation_type="chat"
+):
     """
-    Creates schedule in DB and returns success message.
+    Creates schedule in DB and returns the AI-generated success/fail message.
     schedule_data: { "title": str, "start_time": datetime, "end_time": optional }
     """
-    title = schedule_data.get("title", "Untitled")
-    start_dt = schedule_data.get("start_time", datetime.now())
-    end_dt = schedule_data.get("end_time")
+    try:
+        title = schedule_data.get("title", "Untitled")
+        start_dt = schedule_data.get("start_time", datetime.now())
+        end_dt = schedule_data.get("end_time")
 
-    payload = {
-        "user_id": user_id,
-        "reminder_message": title,
-        "schedule_date": start_dt,
-        "recurrence": None,
-        "status": "Pending",
-    }
-    created_id = create_schedule(payload)
-    disp_time = start_dt.strftime("%Y-%m-%d %H:%M")
-    return created_id, f"Done! I've created the schedule '{title}' for {disp_time}."
+        payload = {
+            "user_id": user_id,
+            "reminder_message": title,
+            "schedule_date": start_dt,
+            "recurrence": None,
+            "status": "Pending",
+        }
+        created_id = create_schedule(payload)
+        # If we got here, success
+        schedule_info = {
+            "title": title,
+            "start_time": start_dt.isoformat(),
+            "end_time": end_dt.isoformat() if end_dt else None,
+            "created_id": created_id,
+        }
+        # We call the LLM to produce a success message:
+        final_msg = generate_action_response(
+            action_type="create",
+            success=True,
+            schedule_info=schedule_info,
+            conversation_history=conversation_history or [],
+            conversation_type=conversation_type,
+        )
+        return created_id, final_msg
+
+    except Exception as e:
+        # If we got here, something failed
+        schedule_info = {
+            "error_details": str(e),
+            "title": schedule_data.get("title", "Untitled"),
+        }
+        final_msg = generate_action_response(
+            action_type="create",
+            success=False,
+            schedule_info=schedule_info,
+            conversation_history=conversation_history or [],
+            conversation_type=conversation_type,
+        )
+        print(final_msg)
+        return None, final_msg
 
 
-def actually_update_schedule(schedule_data, user_id):
+def actually_update_schedule(
+    schedule_data, user_id, conversation_history=None, conversation_type="chat"
+):
     """
     Example schedule_data structure:
     {
       "schedule_identifier": "Doctor Appointment",
       "existing_start_time": <datetime>,
-      "new_title": "Doc Appt Updated",   # optional
+      "new_title": "Doc Appt Updated",
       "new_start_time": <datetime or None>,
-      "new_end_time": <datetime or None> # optional
+      "new_end_time": <datetime or None>
     }
     """
-    identifier = schedule_data["schedule_identifier"]
-    existing_start_dt = schedule_data.get("existing_start_time")
-    new_title = schedule_data.get("new_title")
-    new_start = schedule_data.get("new_start_time")
-    new_end = schedule_data.get("new_end_time")  # optional if you store end_time
+    try:
+        identifier = schedule_data["schedule_identifier"]
+        existing_start_dt = schedule_data.get("existing_start_time")
+        new_title = schedule_data.get("new_title")
+        new_start = schedule_data.get("new_start_time")
+        new_end = schedule_data.get("new_end_time")
 
-    # 1) Find the schedule doc by name + date/time
-    schedule_doc = find_schedule_by_name_and_datetime(
-        user_id, identifier, existing_start_dt
-    )
-    if not schedule_doc:
-        return f"Could not find a schedule named '{identifier}' at {existing_start_dt} to update."
+        schedule_doc = find_schedule_by_name_and_datetime(
+            user_id, identifier, existing_start_dt
+        )
+        if not schedule_doc:
+            raise ValueError(
+                f"Could not find a schedule named '{identifier}' at {existing_start_dt} to update."
+            )
 
-    schedule_id = str(schedule_doc["_id"])
+        schedule_id = str(schedule_doc["_id"])
 
-    # 2) Build updates
-    updates = {}
-    if new_title:
-        updates["reminder_message"] = new_title
-    if new_start:
-        updates["schedule_date"] = new_start
-    # if new_end -> store if your schema has that field, or ignore
+        updates = {}
+        if new_title:
+            updates["reminder_message"] = new_title
+        if new_start:
+            updates["schedule_date"] = new_start
 
-    if not updates:
-        return "No new changes provided."
+        if not updates:
+            raise ValueError("No new changes provided.")
 
-    # 3) Perform the update using the existing model function
-    count = update_schedule(schedule_id, updates)
-    if count == 0:
-        return f"Failed to update schedule '{identifier}' at {existing_start_dt}."
-    return f"Successfully updated schedule '{identifier}' (originally at {existing_start_dt})."
+        count = update_schedule(schedule_id, updates)
+        if count == 0:
+            raise ValueError(
+                f"Failed to update schedule '{identifier}' at {existing_start_dt}."
+            )
+
+        schedule_info = {
+            "identifier": identifier,
+            "original_time": (
+                existing_start_dt.isoformat() if existing_start_dt else None
+            ),
+            "updates": updates,
+        }
+        final_msg = generate_action_response(
+            action_type="update",
+            success=True,
+            schedule_info=schedule_info,
+            conversation_type=conversation_type,
+            conversation_history=conversation_history or [],
+        )
+        return final_msg
+
+    except Exception as e:
+        schedule_info = {"error_details": str(e), "schedule_data": schedule_data}
+        final_msg = generate_action_response(
+            action_type="update",
+            success=False,
+            schedule_info=schedule_info,
+            conversation_history=conversation_history or [],
+            conversation_type=conversation_type,
+        )
+        return final_msg
 
 
-def actually_delete_schedule(schedule_data, user_id):
+def actually_delete_schedule(
+    schedule_data, user_id, conversation_history=None, conversation_type="chat"
+):
     """
     Example schedule_data structure:
     {
@@ -259,23 +326,50 @@ def actually_delete_schedule(schedule_data, user_id):
       "existing_start_time": <datetime>
     }
     """
-    identifier = schedule_data["schedule_identifier"]
-    existing_start_dt = schedule_data.get("existing_start_time")
+    try:
+        identifier = schedule_data["schedule_identifier"]
+        existing_start_dt = schedule_data.get("existing_start_time")
 
-    # 1) Find the schedule doc
-    schedule_doc = find_schedule_by_name_and_datetime(
-        user_id, identifier, existing_start_dt
-    )
-    if not schedule_doc:
-        return f"Could not find a schedule named '{identifier}' at {existing_start_dt} to delete."
+        schedule_doc = find_schedule_by_name_and_datetime(
+            user_id, identifier, existing_start_dt
+        )
+        if not schedule_doc:
+            raise ValueError(
+                f"Could not find a schedule named '{identifier}' at {existing_start_dt} to delete."
+            )
 
-    schedule_id = str(schedule_doc["_id"])
+        schedule_id = str(schedule_doc["_id"])
+        deleted_count = delete_schedule(schedule_id)
+        if deleted_count == 0:
+            raise ValueError(
+                f"Failed to delete schedule '{identifier}' at {existing_start_dt}."
+            )
 
-    # 2) Delete using the existing function
-    deleted_count = delete_schedule(schedule_id)
-    if deleted_count == 0:
-        return f"Failed to delete schedule '{identifier}' at {existing_start_dt}."
-    return f"Successfully deleted schedule '{identifier}' originally at {existing_start_dt}."
+        schedule_info = {
+            "identifier": identifier,
+            "original_time": (
+                existing_start_dt.isoformat() if existing_start_dt else None
+            ),
+        }
+        final_msg = generate_action_response(
+            action_type="delete",
+            success=True,
+            schedule_info=schedule_info,
+            conversation_history=conversation_history or [],
+            conversation_type=conversation_type,
+        )
+        return final_msg
+
+    except Exception as e:
+        schedule_info = {"error_details": str(e), "schedule_data": schedule_data}
+        final_msg = generate_action_response(
+            action_type="delete",
+            success=False,
+            schedule_info=schedule_info,
+            conversation_history=conversation_history or [],
+            conversation_type=conversation_type,
+        )
+        return final_msg
 
 
 @jwt_required()
@@ -335,6 +429,8 @@ def chat():
                             "end_time": end_dt,
                         },
                         user_id,
+                        conversation_history,
+                        conversation_type,
                     )
                     # Add assistant message with success
                     ai_msg = {"role": "assistant", "content": success_msg}
@@ -353,7 +449,9 @@ def chat():
                     return jsonify({"chat_id": chat_id, "response": reply}), 200
 
             elif intent == "update_schedule":
-                update_msg = actually_update_schedule(intent_result, user_id)
+                update_msg = actually_update_schedule(
+                    intent_result, user_id, conversation_history, conversation_type
+                )
                 ai_msg = {"role": "assistant", "content": update_msg}
                 add_message_to_chat(chat_id, ai_msg)
                 conversation_history.append(ai_msg)
@@ -361,7 +459,9 @@ def chat():
 
             elif intent == "delete_schedule":
                 # new delete logic
-                msg = actually_delete_schedule(intent_result, user_id)
+                msg = actually_delete_schedule(
+                    intent_result, user_id, conversation_history, conversation_type
+                )
                 ai_msg = {"role": "assistant", "content": msg}
                 add_message_to_chat(chat_id, ai_msg)
                 conversation_history.append(ai_msg)
@@ -388,7 +488,11 @@ def chat():
 
         return jsonify({"chat_id": chat_id, "response": final_ai_msg}), 200
 
+    except ValueError as e:
+        print(e)
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
+        print(e)
         return jsonify({"error": str(e)}), 500
 
 
@@ -454,6 +558,10 @@ def get_chat_by_id(chat_id):
         user_id = get_jwt_identity()
         if not user_id:
             return jsonify({"error": "User not authenticated"}), 401
+        
+        # Validate chat_id
+        if not ObjectId.is_valid(chat_id):
+            return jsonify({"error": "'chat_id' is not a valid ObjectId"}), 400
 
         # Retrieve the specific chat by ID
         chat = find_chat_by_id(chat_id)
@@ -473,9 +581,13 @@ def get_chat_by_id(chat_id):
 
         return jsonify({"chat": chat_serialized}), 200
 
+    except InvalidId:
+        return jsonify({"error": "Invalid ObjectId for schedule_id"}), 400
+
     except Exception as e:
+        print(e)
         return (
-            jsonify({"error": "An unexpected error occurred. Please try again later."}),
+            jsonify({"error": f"An unexpected error occurred. {e}"}),
             500,
         )
 
@@ -549,6 +661,10 @@ def delete_chat_by_id(chat_id):
         user_id = get_jwt_identity()
         if not user_id:
             return jsonify({"error": "User not authenticated"}), 401
+        
+        # Validate chat_id
+        if not ObjectId.is_valid(chat_id):
+            return jsonify({"error": "'chat_id' is not a valid ObjectId"}), 400
 
         # Retrieve the specific chat by ID
         chat = find_chat_by_id(chat_id)
@@ -565,6 +681,9 @@ def delete_chat_by_id(chat_id):
             return jsonify({"error": "Failed to delete chat"}), 500
 
         return jsonify({"message": "Chat deleted successfully"}), 200
+
+    except InvalidId:
+        return jsonify({"error": "Invalid ObjectId for schedule_id"}), 400
 
     except Exception:
         return (

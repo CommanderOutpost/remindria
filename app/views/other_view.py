@@ -1,3 +1,4 @@
+from bson import ObjectId
 from flask import jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.models.other_model import (
@@ -12,6 +13,7 @@ from app.models.other_model import set_seen_to_true, find_others_by_user_id
 from app.ai.caller import summarize_with_ai
 from datetime import datetime, timezone
 from config import config
+from bson.errors import InvalidId
 
 
 @jwt_required()
@@ -191,6 +193,10 @@ def delete_other(other_id):
         user_id = get_jwt_identity()
         if not user_id:
             return jsonify({"error": "Unauthorized access"}), 401
+        
+        # Validate other_id
+        if not ObjectId.is_valid(other_id):
+            return jsonify({"error": "'other_id' is not a valid ObjectId"}), 400
 
         # Delete the other entry
         try:
@@ -202,7 +208,11 @@ def delete_other(other_id):
 
         return jsonify({"message": "Other deleted successfully"}), 200
 
+    except InvalidId:
+        return jsonify({"error": "Invalid ObjectId for schedule_id"}), 400
+
     except Exception as e:
+        print(e)
         return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
 
 
