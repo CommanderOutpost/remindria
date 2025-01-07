@@ -3,6 +3,7 @@ from flask import request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.models.schedule_model import (
     create_schedule,
+    delete_all_schedules_for_user,
     find_schedules_by_user_id,
     find_schedule_by_id,
     get_schedules_in_date_range,
@@ -405,6 +406,42 @@ def delete_schedule(id):
 
     except InvalidId:
         return jsonify({"error": "Invalid ObjectId for schedule_id"}), 400
+    except Exception as e:
+        return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
+
+
+@jwt_required()
+def delete_all_schedules():
+    """
+    Deletes all schedules for the currently authenticated user. Requires JWT authentication.
+
+    Returns:
+        JSON Response:
+            - Success: {"message": "All schedules deleted successfully", "deleted_count": int}
+            - Error: {"error": "string"}
+    """
+    try:
+        # Get the current user's ID from the JWT
+        user_id = get_jwt_identity()
+        if not user_id:
+            return jsonify({"error": "Unauthorized access"}), 401
+
+        # Delete all schedules for the user
+        deleted_count = delete_all_schedules_for_user(user_id)
+
+        return (
+            jsonify(
+                {
+                    "message": "All schedules deleted successfully",
+                    "deleted_count": deleted_count,
+                }
+            ),
+            200,
+        )
+
+    except ValueError as ve:
+        return jsonify({"error": f"Validation Error: {str(ve)}"}), 400
+
     except Exception as e:
         return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
 

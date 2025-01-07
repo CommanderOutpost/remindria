@@ -13,7 +13,6 @@ schedule_collection = get_collection(
 )
 
 
-
 # Schedule schema
 class ScheduleModel:
     """
@@ -431,3 +430,32 @@ def delete_schedule(schedule_id):
         raise ValueError(f"Validation Error: {ve}")
     except Exception as e:
         raise Exception(f"Failed to delete schedule with ID '{schedule_id}': {e}")
+
+
+def delete_all_schedules_for_user(user_id):
+    """
+    Deletes all schedules for a specific user.
+
+    Args:
+        user_id (str): The ID of the user whose schedules should be deleted.
+
+    Returns:
+        int: The number of schedules deleted.
+
+    Raises:
+        ValueError: If the provided user_id is not a valid ObjectId.
+        pymongo.errors.PyMongoError: If there is a database-related error.
+    """
+    try:
+        # Validate the user_id
+        if not ObjectId.is_valid(user_id):
+            raise ValueError(f"'{user_id}' is not a valid ObjectId.")
+
+        # Perform the delete operation
+        result = schedule_collection.delete_many({"user_id": ObjectId(user_id)})
+        return result.deleted_count
+
+    except ValueError as ve:
+        raise ValueError(f"Validation Error: {ve}")
+    except Exception as e:
+        raise Exception(f"Failed to delete schedules for user ID '{user_id}': {e}")

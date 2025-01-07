@@ -9,6 +9,7 @@ from app.views.schedule_view import (
     sync_google_calendar_to_schedules,
     get_recent_schedules,
     get_schedules_in_date_range_view,
+    delete_all_schedules,
 )
 
 # Create a blueprint for schedule routes
@@ -33,6 +34,7 @@ schedule_routes.add_url_rule(
 schedule_routes.add_url_rule(
     "/<id>", view_func=delete_schedule, methods=["DELETE"]
 )  # Delete a schedule
+schedule_routes.add_url_rule("/", view_func=delete_all_schedules, methods=["DELETE"])
 schedule_routes.add_url_rule(
     "/sync/google/classroom",
     view_func=sync_google_coursework_to_schedules,
