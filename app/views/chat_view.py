@@ -45,6 +45,8 @@ def create_new_chat_with_system_prompt(
     """
     # Summaries
     schedules = get_30_day_schedules_for_user(user_id)
+    
+    print(schedules)
 
     if schedules:
         schedules_readable = format_schedule_human_readable({"schedules": schedules})
@@ -70,6 +72,10 @@ def create_new_chat_with_system_prompt(
             "   - volume/pitch variations for emotional effect\n"
             "4) Focus on scheduling tasks from 30 days before and after today. If the user wants to create, update, or delete a schedule, do so in this phone conversation style.\n"
             "5) Always ask clarifying questions if details are missing.\n"
+            "If the user asks to create a schedule, ask for all info needed to create it. Ask for only date and time and name for now. "
+            "If the user asks to update a schedule, ask for the schedule they want to update and the information they want to change. "
+            "If the user asks to delete a schedule, ask for the schedule they want to delete. "
+            "If the user asks for more than one action to be done at the same time. Make sure you get all the info needed for all tasks."
             "6) Always confirm changes (create/update/delete) before finalizing them.\n"
             "7) No disclaimers, no code blocks—only SSML.\n"
             "8) Assume the user can handle the SSML output directly in a TTS engine.\n\n"
@@ -81,6 +87,7 @@ def create_new_chat_with_system_prompt(
             "After finding out what the user wants to create, update or delete and with what, ALWAYS ALWAYS ask for confirmation. "
             f"The current language is {language}. You must speak in this language."
             "Today's date is " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "."
+            "Use the current date and time as a reference for the user's schedules, requests and announcements."
         )
 
     else:
@@ -96,8 +103,10 @@ def create_new_chat_with_system_prompt(
             "If the user asks to create a schedule, ask for all info needed to create it. Ask for only date and time and name for now. "
             "If the user asks to update a schedule, ask for the schedule they want to update and the information they want to change. "
             "If the user asks to delete a schedule, ask for the schedule they want to delete. "
+            "If the user asks for more than one action to be done at the same time. Make sure you get all the info needed for all tasks."
             "After finding out what the user wants to create, update or delete and with what, ALWAYS ALWAYS ask for confirmation. "
             "Today's date is " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "."
+            "Use the current date and time as a reference for the user's schedules, requests and announcements."
         )
 
     # Generate chat title
@@ -378,8 +387,8 @@ def chat():
     Main chat endpoint.
     1. Load or create the chat doc
     2. Append user message
-    3. Parse entire conversation to see if user wants to add a schedule
-    4. If yes, create schedule
+    3. Parse entire conversation to see if user wants to add/update/delete schedules
+    4. If yes, handle each schedule action in the array
     5. If no, do normal LLM flow
     6. Possibly trim older messages
     7. Return final response
@@ -408,66 +417,80 @@ def chat():
         append_user_message(chat_id, conversation_history, prompt)
 
         # 3) Let the LLM parse the entire conversation to see if there's a schedule request
+        #    Now parse_natural_language_instructions returns a LIST of actions or None
         intent_result = parse_natural_language_instructions(
             conversation_history, schedules
         )
-        # If you want, you could do: parse_natural_language_instructions(conversation_history, "Look for schedule creation")
-        if intent_result:
-            intent = intent_result.get("intent")
-            if intent == "add_schedule":
-                # 4) We got a schedule creation request
-                # Gather the data from intent_result
-                schedule_title = intent_result["schedule_title"]
-                start_dt = intent_result["start_time"]
-                end_dt = intent_result["end_time"]
 
-                if schedule_title and start_dt:
-                    created_id, success_msg = actually_create_schedule(
-                        {
-                            "title": schedule_title,
-                            "start_time": start_dt,
-                            "end_time": end_dt,
-                        },
-                        user_id,
-                        conversation_history,
-                        conversation_type,
+        # 4) Handle schedule actions if they exist
+        if intent_result:  # This is now a list of action dicts or None
+            all_responses = []  # We'll collect each action's final message here
+
+            # Loop through each action
+            for action_dict in intent_result:
+                intent = action_dict["intent"]
+
+                if intent == "add_schedule":
+                    # Gather the data
+                    schedule_title = action_dict["schedule_title"]
+                    start_dt = action_dict["start_time"]
+                    end_dt = action_dict["end_time"]
+
+                    if schedule_title and start_dt:
+                        created_id, success_msg = actually_create_schedule(
+                            {
+                                "title": schedule_title,
+                                "start_time": start_dt,
+                                "end_time": end_dt,
+                            },
+                            user_id,
+                            conversation_history,
+                            conversation_type,
+                        )
+                        # Add assistant message with success/fail
+                        ai_msg = {"role": "assistant", "content": success_msg}
+                        add_message_to_chat(chat_id, ai_msg)
+                        conversation_history.append(ai_msg)
+                        all_responses.append(success_msg)
+                    else:
+                        # The LLM said "add_schedule" but didn't provide enough info
+                        reply = (
+                            "I see you're trying to schedule something, but "
+                            "I'm missing details. Could you clarify the date/time and name?"
+                        )
+                        ai_msg = {"role": "assistant", "content": reply}
+                        add_message_to_chat(chat_id, ai_msg)
+                        conversation_history.append(ai_msg)
+                        all_responses.append(reply)
+
+                elif intent == "update_schedule":
+                    update_msg = actually_update_schedule(
+                        action_dict, user_id, conversation_history, conversation_type
                     )
-                    # Add assistant message with success
-                    ai_msg = {"role": "assistant", "content": success_msg}
+                    ai_msg = {"role": "assistant", "content": update_msg}
                     add_message_to_chat(chat_id, ai_msg)
                     conversation_history.append(ai_msg)
+                    all_responses.append(update_msg)
 
-                    return jsonify({"chat_id": chat_id, "response": success_msg}), 200
+                elif intent == "delete_schedule":
+                    msg = actually_delete_schedule(
+                        action_dict, user_id, conversation_history, conversation_type
+                    )
+                    ai_msg = {"role": "assistant", "content": msg}
+                    add_message_to_chat(chat_id, ai_msg)
+                    conversation_history.append(ai_msg)
+                    all_responses.append(msg)
 
                 else:
-                    # The LLM said "add_schedule" but didn't provide a complete date/time or title
-                    # We'll just say we couldn't parse it fully
-                    reply = "I see you're trying to schedule something, but I'm missing details. Could you clarify the date/time and name?"
-                    ai_msg = {"role": "assistant", "content": reply}
-                    add_message_to_chat(chat_id, ai_msg)
-                    conversation_history.append(ai_msg)
-                    return jsonify({"chat_id": chat_id, "response": reply}), 200
+                    # If we get here, it's an unrecognized intent
+                    # (though parse_natural_language_instructions should have caught that)
+                    pass
 
-            elif intent == "update_schedule":
-                update_msg = actually_update_schedule(
-                    intent_result, user_id, conversation_history, conversation_type
-                )
-                ai_msg = {"role": "assistant", "content": update_msg}
-                add_message_to_chat(chat_id, ai_msg)
-                conversation_history.append(ai_msg)
-                return jsonify({"chat_id": chat_id, "response": update_msg}), 200
+            # After processing all actions, return a combined response or last response
+            combined_response = "\n".join(all_responses)
+            return jsonify({"chat_id": chat_id, "response": combined_response}), 200
 
-            elif intent == "delete_schedule":
-                # new delete logic
-                msg = actually_delete_schedule(
-                    intent_result, user_id, conversation_history, conversation_type
-                )
-                ai_msg = {"role": "assistant", "content": msg}
-                add_message_to_chat(chat_id, ai_msg)
-                conversation_history.append(ai_msg)
-                return jsonify({"chat_id": chat_id, "response": msg}), 200
-
-        # 5) Normal LLM flow
+        # 5) Normal LLM flow if no schedule actions recognized
         maybe_proactive_trimming(chat_id, conversation_history)
         ai_response = get_ai_response(prompt, conversation_history)
 
@@ -558,7 +581,7 @@ def get_chat_by_id(chat_id):
         user_id = get_jwt_identity()
         if not user_id:
             return jsonify({"error": "User not authenticated"}), 401
-        
+
         # Validate chat_id
         if not ObjectId.is_valid(chat_id):
             return jsonify({"error": "'chat_id' is not a valid ObjectId"}), 400
@@ -661,7 +684,7 @@ def delete_chat_by_id(chat_id):
         user_id = get_jwt_identity()
         if not user_id:
             return jsonify({"error": "User not authenticated"}), 401
-        
+
         # Validate chat_id
         if not ObjectId.is_valid(chat_id):
             return jsonify({"error": "'chat_id' is not a valid ObjectId"}), 400

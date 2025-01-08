@@ -186,7 +186,7 @@ def generate_action_response(
     ai_text = response.choices[0].message.content.strip()
     if conversation_type == "call":
         ai_text = extract_speak_block(ai_text)
-        
+
     return ai_text
 
 
@@ -230,82 +230,93 @@ def summarize_with_ai(conversation_history):
 
 def parse_natural_language_instructions(
     conversation_history: List[Dict[str, str]], schedules
-) -> Optional[Dict[str, Any]]:
+) -> Optional[List[Dict[str, Any]]]:
     """
     Parses the entire conversation history to determine if the user intends
-    to create or update a schedule (or neither).
+    to create, update, or delete one or more schedules (or none at all).
 
-    Possible return structures:
-      - For new schedule:
-        {
-          "intent": "add_schedule",
-          "schedule_title": "Event Title",
-          "start_time": <datetime>,
-          "end_time": <datetime or None>
-        }
-      - For updating an existing schedule:
-        {
-          "intent": "update_schedule",
-          "schedule_identifier": "Name or ID of schedule to update",
-          "new_title": <str or None>,
-          "new_start_time": <datetime or None>,
-          "new_end_time": <datetime or None>
-        }
-      - For deleting an existing schedule:
-        {
-          "intent": "delete_schedule",
-          "schedule_identifier": "Name or ID of schedule to delete"
-        }
-      - None (if no schedule intent).
+    Returns:
+    --------
+    - A list of schedule actions (each an action dict) of these forms:
+      1) For new schedule:
+         {
+           "intent": "add_schedule",
+           "schedule_title": str,
+           "start_time": datetime,
+           "end_time": datetime or None
+         }
+
+      2) For updating an existing schedule:
+         {
+           "intent": "update_schedule",
+           "schedule_identifier": str,
+           "existing_start_time": datetime or None,
+           "new_title": str or None,
+           "new_start_time": datetime or None,
+           "new_end_time": datetime or None
+         }
+
+      3) For deleting an existing schedule:
+         {
+           "intent": "delete_schedule",
+           "schedule_identifier": str,
+           "existing_start_time": datetime or None
+         }
+
+    - If no recognized schedule operations, returns None.
     """
 
+    # 1. Build a strong system prompt that instructs the LLM to always output a JSON array
+    #    of objects (except "null" if no schedule action is recognized).
     system_prompt = (
         "You are a strict schedule-intent parser. You do NOT chat. You do NOT explain. "
-        "You ONLY read the entire conversation below to see if the user wants to create, update, or delete a schedule. "
+        "You ONLY read the entire conversation below to see if the user wants to create, update, or delete schedules. "
         "\n\n"
         "Output EXACTLY one of the following:\n\n"
-        "1) JSON for creating a schedule:\n"
+        "1) A JSON array of one or more objects (like `[ {...}, {...} ]`). "
+        "   Each object in the array must be one of the following:\n"
+        "   JSON for creating a schedule"
         "   {\n"
         '     "intent": "add_schedule",\n'
         '     "schedule_title": "Event Title",\n'
         '     "start_time": "YYYY-MM-DD HH:MM:SS",\n'
         '     "end_time": "YYYY-MM-DD HH:MM:SS"  // optional\n'
-        "   }\n\n"
-        "2) JSON for updating a schedule:\n"
+        "   },\n"
+        "   JSON for updating a schedule"
         "   {\n"
         '     "intent": "update_schedule",\n'
         '     "schedule_identifier": "existing schedule name",\n'
-        '     "existing_start_time": "YYYY-MM-DD HH:MM:SS",\n'  # New field
+        '     "existing_start_time": "YYYY-MM-DD HH:MM:SS",\n'
         '     "new_title": "Updated Title" // optional,\n'
         '     "new_start_time": "YYYY-MM-DD HH:MM:SS" // optional,\n'
         '     "new_end_time": "YYYY-MM-DD HH:MM:SS" // optional\n'
-        "   }\n\n"
-        "3) JSON for deleting a schedule:\n"
+        "   },\n"
+        "   JSON for deleting a schedule"
         "   {\n"
         '     "intent": "delete_schedule",\n'
         '     "schedule_identifier": "existing schedule name",\n'
         '     "existing_start_time": "YYYY-MM-DD HH:MM:SS"\n'
         "   }\n\n"
-        "4) The word 'null' (as a string) if no schedule creation, update, or delete is recognized.\n\n"
+        "2) The word 'null' (as a string) if no schedule creation, update, or delete is recognized.\n\n"
         "IMPORTANT:\n"
-        "- You MUST NOT produce any other text or explanation.\n"
+        "- You MUST NOT produce any text besides the JSON array or 'null'.\n"
         "- If there's no schedule-intent, or data is incomplete, output 'null' ONLY.\n"
-        "- You do not greet or thank or respond with any text besides the JSON or 'null'.\n"
-        "- You do NOT wrap JSON in code fences. You do NOT add extra commentary. Either valid JSON or 'null'."
+        "- You do NOT wrap JSON in code fences. You do NOT add extra commentary.\n"
+        "- Either a valid JSON array of objects or 'null'.\n"
+        "- Even if there's only a single action, it must still be in an array like `[ {...} ]`.\n\n"
+        "- The most recent information the user provides is what would be used.\n"
+        "- You would assess the entire conversation to find out what the user wants to do and you would do it well."
+        "- You will only return the json when the other AI asks for confirmation and the user accepts the confirmation."
         f"Schedules we are working with are: {schedules}"
     )
 
-    # Build the prompt for the LLM with your entire conversation:
+    # 2. Build the message sequence for the chat model
     messages = [{"role": "system", "content": system_prompt}]
-
     for msg in conversation_history:
         if msg["role"] != "system":
             messages.append({"role": msg["role"], "content": msg["content"]})
 
-    # print("\n\n\n\n\n")
-    # print(messages)
-    # print("\n\n\n\n\n")
-
+    # 3. Call the LLM
     try:
         response = openai_client.chat.completions.create(
             model="gpt-4o-mini",
@@ -318,83 +329,108 @@ def parse_natural_language_instructions(
         return None
 
     ai_text = response.choices[0].message.content.strip()
-    print("\n")
-    print("Raw AI Response:\n", ai_text)
+    print("\nRaw AI Response:\n", ai_text)
 
-    # Extract JSON from the AI response
+    # 4. Extract JSON from the AI response
     json_str = extract_json_from_text(ai_text)
     if not json_str:
         return None
 
-    # Attempt to parse
+    # 5. Parse the JSON. We expect either a JSON array or the string "null".
     try:
-        parsed = json.loads(json_str)
+        parsed_data = json.loads(json_str)
     except json.JSONDecodeError as e:
         print(f"JSON decode error: {e}")
         return None
 
-    # If it's "add_schedule"
-    if parsed.get("intent") == "add_schedule":
-        start_dt = parse_datetime(parsed.get("start_time", ""))
-        end_dt = (
-            parse_datetime(parsed.get("end_time", ""))
-            if parsed.get("end_time")
-            else None
-        )
-        if not start_dt:
-            print("No valid start_time found.")
+    # 6. If "null" (as a string) or data not recognized, return None
+    #    (In some cases, the AI might produce the literal string 'null' within quotes)
+    if isinstance(parsed_data, str) and parsed_data.lower() == "null":
+        return None
+
+    # 7. Our expected structure is a list of objects if not "null"
+    if not isinstance(parsed_data, list):
+        print("Parsed data is not a list - returning None.")
+        return None
+
+    final_actions = []
+
+    # 8. Iterate through each object in the array
+    for item in parsed_data:
+        if not isinstance(item, dict):
+            print("Array item is not a dict - invalid format.")
             return None
 
-        return {
-            "intent": "add_schedule",
-            "schedule_title": parsed.get("schedule_title", ""),
-            "start_time": start_dt,
-            "end_time": end_dt,
-        }
+        intent = item.get("intent")
 
-    # If it's "update_schedule"
-    elif parsed.get("intent") == "update_schedule":
-        schedule_id = parsed.get("schedule_identifier", "")
-        existing_start_str = parsed.get("existing_start_time", "")
-        new_title = parsed.get("new_title")
-        new_start_str = parsed.get("new_start_time", "")
-        new_end = (
-            parse_datetime(parsed.get("new_end_time", ""))
-            if parsed.get("new_end_time")
-            else None
-        )
+        # ADD SCHEDULE
+        if intent == "add_schedule":
+            start_dt = parse_datetime(item.get("start_time", ""))
+            end_dt = (
+                parse_datetime(item.get("end_time", ""))
+                if item.get("end_time")
+                else None
+            )
+            if not start_dt:
+                print("No valid start_time found for add_schedule item.")
+                return None
+            action = {
+                "intent": "add_schedule",
+                "schedule_title": item.get("schedule_title", ""),
+                "start_time": start_dt,
+                "end_time": end_dt,
+            }
+            final_actions.append(action)
 
-        existing_start_dt = parse_datetime(existing_start_str)
-        new_start_dt = parse_datetime(new_start_str)
+        # UPDATE SCHEDULE
+        elif intent == "update_schedule":
+            schedule_id = item.get("schedule_identifier", "")
+            existing_start_str = item.get("existing_start_time", "")
+            new_title = item.get("new_title")
+            new_start_str = item.get("new_start_time", "")
+            new_end = (
+                parse_datetime(item.get("new_end_time", ""))
+                if item.get("new_end_time")
+                else None
+            )
 
-        if not schedule_id and not new_title and not new_start_dt and not new_end:
-            print("No update info provided.")
+            existing_start_dt = parse_datetime(existing_start_str)
+            new_start_dt = parse_datetime(new_start_str)
+
+            # If there's literally no update info:
+            if not schedule_id and not new_title and not new_start_dt and not new_end:
+                print("No update info provided for update_schedule item.")
+                return None
+
+            action = {
+                "intent": "update_schedule",
+                "schedule_identifier": schedule_id,
+                "existing_start_time": existing_start_dt,
+                "new_title": new_title,
+                "new_start_time": new_start_dt,
+                "new_end_time": new_end,
+            }
+            final_actions.append(action)
+
+        # DELETE SCHEDULE
+        elif intent == "delete_schedule":
+            schedule_id = item.get("schedule_identifier", "")
+            existing_start_str = item.get("existing_start_time", "")
+            if not schedule_id:
+                print("No schedule_id found for delete_schedule item.")
+                return None
+
+            existing_start_dt = parse_datetime(existing_start_str)
+            action = {
+                "intent": "delete_schedule",
+                "schedule_identifier": schedule_id,
+                "existing_start_time": existing_start_dt,
+            }
+            final_actions.append(action)
+
+        else:
+            # Unrecognized intent
+            print(f"Unrecognized intent in item: {item}")
             return None
 
-        return {
-            "intent": "update_schedule",
-            "schedule_identifier": schedule_id,
-            "existing_start_time": existing_start_dt,
-            "new_title": new_title,
-            "new_start_time": new_start_dt,
-            "new_end_time": new_end,
-        }
-
-    # If it's "delete_schedule"
-    elif parsed.get("intent") == "delete_schedule":
-        schedule_id = parsed.get("schedule_identifier", "")
-        existing_start_str = parsed.get("existing_start_time", "")
-        if not schedule_id:
-            print("No schedule_id found.")
-            return None
-
-        existing_start_dt = parse_datetime(existing_start_str)
-
-        return {
-            "intent": "delete_schedule",
-            "existing_start_time": existing_start_dt,
-            "schedule_identifier": schedule_id,
-        }
-
-    # Otherwise, no recognized schedule intent
-    return None
+    return final_actions if final_actions else None

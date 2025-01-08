@@ -137,7 +137,7 @@ def clean_google_announcement_text(text):
 
 def extract_json_from_text(text: str) -> Optional[str]:
     """
-    Extracts the first JSON object found in the given text.
+    Extracts a JSON array or object from the text. If the text is just 'null', that is also handled upstream.
 
     Args:
         text (str): The text containing JSON.
@@ -145,19 +145,19 @@ def extract_json_from_text(text: str) -> Optional[str]:
     Returns:
         Optional[str]: The extracted JSON string or None if not found.
     """
-    # Pattern to find JSON within code blocks like ```json ... ```
-    code_block_pattern = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
+    # Pattern to find a JSON array or object within code blocks:
+    code_block_pattern = re.compile(r"```json\s*(\[.*?\]|\{.*?\})\s*```", re.DOTALL)
     match = code_block_pattern.search(text)
     if match:
         return match.group(1)
 
-    # If no code block, try to find the first JSON object
-    json_pattern = re.compile(r"(\{.*\})", re.DOTALL)
+    # If not in code blocks, try to find a JSON array or object
+    json_pattern = re.compile(r"(\[.*?\]|\{.*?\})", re.DOTALL)
     match = json_pattern.search(text)
     if match:
         return match.group(1)
 
-    # No JSON found
+    # Not found
     return None
 
 

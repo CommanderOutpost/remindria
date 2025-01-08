@@ -76,5 +76,13 @@ def create_app():
     def internal_error(error):
         app.logger.error(f"Server Error: {error}, Path: {request.path}")
         return jsonify({"error": "Internal Server Error"}), 500
+    
+    # Command to list all routes
+    @app.cli.command("list-routes")
+    def list_routes():
+        """List all routes in the application."""
+        for rule in app.url_map.iter_rules():
+            methods = ', '.join(rule.methods)
+            print(f"{rule.endpoint:30s} {methods:20s} {rule.rule}")
 
     return app
