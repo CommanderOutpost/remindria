@@ -34,10 +34,11 @@ from app.ai.caller import (
     parse_natural_language_instructions,
 )
 from bson.errors import InvalidId
+from app.models.assistant_model import find_assistant_by_id
 
 
 def create_new_chat_with_system_prompt(
-    user_id, user, conversation_type="chat", language="English"
+    user_id, user, assistant_id, conversation_type="chat"
 ):
     """
     Creates a new chat doc with a system prompt tailored to the user's schedule & announcements.
@@ -53,69 +54,55 @@ def create_new_chat_with_system_prompt(
 
     summary_not_seen, summary_seen = fetch_and_summarize_others(user_id)
 
+    mandatory_rules = (
+        f"Here are the user’s relevant schedules:\n\n{schedules_readable}\n\n"
+        f"Here’s a summary of new announcements:\n\n{summary_not_seen}\n\n"
+        f"Here’s a summary of older announcements:\n\n{summary_seen}\n\n"
+        "Always ask questions in your way if details are missing.\n"
+        "If the user asks to create a schedule, ask for all info needed to create it. Ask for only start date and time, end date and time and name for now. \n"
+        "If the user asks to update a schedule, ask for the schedule they want to update and the information they want to change. \n"
+        "If the user asks to delete a schedule, ask for the schedule they want to delete. \n"
+        "If the user does not specify a date, assume they mean today. \n"
+        "If the user asks for more than one action to be done at the same time. Make sure you get all the info needed for all tasks.\n"
+        "After finding out what the user wants to create, update or delete and with what, ALWAYS ALWAYS ask for confirmation. "
+        "Today's date is " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "."
+        "Use the current date and time as a reference for the user's schedules, requests and announcements."
+    )
+
+    call_rules = (
+        "You are speaking with the user on a phone call."
+        "Example of what you should produce: <prosody pitch='+10%' rate='fast'>“Hey there!”</prosody> or <prosody pitch='+15%' rate='fast'>“Sure thing!”</prosody>"
+        "You respond verbally, as though you're talking in real time, and you must produce SSML markup for speech synthesis. "
+        "IMPORTANT RULES:\n"
+        "1) **All** your output must be valid SSML within a single <speak>...</speak> block.\n"
+        "2) Do **not** provide code fences (```).\n"
+        "3) You can use the following SSML features for realism:\n"
+        "   - <prosody> for pitch/rate changes\n"
+        "   - <break> to insert natural pauses\n"
+        "   - <emphasis> to highlight key words\n"
+        "   - volume/pitch variations for emotional effect\n"
+        "Again, respond **only** with SSML in a <speak>...</speak> block. No extraneous text. "
+        "4) Assume the user can handle the SSML output directly in a TTS engine.\n\n"
+        "5) No disclaimers, no code blocks—only SSML.\n"
+    )
+
+    assistant = find_assistant_by_id(assistant_id)
+    assistant_name = assistant.get("name", "Assistant")
+    assistant_personality = assistant.get("personality")
+    assistant_language = assistant.get("language")
+
     if conversation_type == "call":
         system_prompt = (
-            "You are Remindria, speaking with the user on a phone call. "
-            "You respond verbally, as though you're talking in real time, and you must produce SSML markup for speech synthesis. "
-            "Use casual, friendly language like <prosody pitch='+10%' rate='fast'>“Hey there!”</prosody> or <prosody pitch='+15%' rate='fast'>“Sure thing!”</prosody>, "
-            "and keep the tone upbeat. "
-            "\n\n"
-            "IMPORTANT RULES:\n"
-            "1) **All** your output must be valid SSML within a single <speak>...</speak> block.\n"
-            "2) Do **not** provide code fences (```).\n"
-            "3) You can use the following SSML features for realism:\n"
-            "   - <prosody> for pitch/rate changes\n"
-            "   - <break> to insert natural pauses\n"
-            "   - <emphasis> to highlight key words\n"
-            "   - volume/pitch variations for emotional effect\n"
-            "4) Focus on scheduling tasks from 30 days before and after today. If the user wants to create, update, or delete a schedule, do so in this phone conversation style.\n"
-            "5) Always ask clarifying questions if details are missing.\n"
-            "If the user asks to create a schedule, ask for all info needed to create it. Ask for only start date and time, end date and time and name for now. \n"
-            "If the user asks to update a schedule, ask for the schedule they want to update and the information they want to change. \n"
-            "If the user asks to delete a schedule, ask for the schedule they want to delete. \n"
-            "If the user does not specify a date, assume they mean today. \n"
-            "If the user asks for more than one action to be done at the same time. Make sure you get all the info needed for all tasks.\n"
-            "6) Always confirm changes (create/update/delete) before finalizing them.\n"
-            "7) No disclaimers, no code blocks—only SSML.\n"
-            "8) Assume the user can handle the SSML output directly in a TTS engine.\n\n"
-            f"By the way, here's some background on the user's existing schedules:\n"
-            f"{schedules_readable}\n\n"
-            f"And here are recent announcements:\n{summary_not_seen}\n\n"
-            f"Older announcements:\n{summary_seen}\n\n"
-            "Again, respond **only** with SSML in a <speak>...</speak> block. No extraneous text. "
-            "After finding out what the user wants to create, update or delete and with what, ALWAYS ALWAYS ask for confirmation. "
-            f"The current language is {language}. You must speak in this language."
-            "Today's date is " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "."
-            "Use the current date and time as a reference for the user's schedules, requests and announcements."
+            f"You are {assistant_name}. You speak only {assistant_language}. Your personality is {assistant_personality}. \n"
+            f"{call_rules}"
+            f"{mandatory_rules}"
         )
 
     else:
-        # Build system prompt
-        system_prompt = (
-            "You’re Remindria, a friendly buddy who helps users manage their schedules. "
-            "You talk in a casual, approachable style. Focus on tasks from 30 days before and after today. "
-            f"Here are the user’s relevant schedules:\n\n{schedules_readable}\n\n"
-            f"Here’s a summary of new announcements:\n\n{summary_not_seen}\n\n"
-            f"Here’s a summary of older announcements:\n\n{summary_seen}\n\n"
-            "Greet the user warmly and talk about their current tasks and announcements. "
-            "Keep the vibe casual and helpful. "
-            "If the user asks to create a schedule, ask for all info needed to create it. Ask for only start date and time, end date and time and name for now. \n"
-            "If the user asks to update a schedule, ask for the schedule they want to update and the information they want to change. \n"
-            "If the user asks to delete a schedule, ask for the schedule they want to delete. \n"
-            "If the user does not specify a date, assume they mean today. \n"
-            "If the user asks for more than one action to be done at the same time. Make sure you get all the info needed for all tasks.\n"
-            "After finding out what the user wants to create, update or delete and with what, ALWAYS ALWAYS ask for confirmation. "
-            "Today's date is " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "."
-            "Use the current date and time as a reference for the user's schedules, requests and announcements."
-        )
-
-    # Generate chat title
-    # chat_title = generate_chat_title(
-    #     user_info=user,
-    #     schedules_readable=schedules_readable,
-    #     not_seen_others_readable=summary_not_seen,
-    #     seen_others_readable=summary_seen,
-    # )
+        system_prompt = {
+            f"You are {assistant_name}. You speak only {assistant_language}. Your personality is {assistant_personality}. \n"
+            f"{mandatory_rules}"
+        }
 
     chat_title = "Chat with Remindria"
 
@@ -134,7 +121,7 @@ def create_new_chat_with_system_prompt(
     return conversation_history, chat_title, new_chat_id, schedules
 
 
-def get_or_create_chat(user_id, data, conversation_type="chat", language="English"):
+def get_or_create_chat(user_id, data, assistant_id, conversation_type="chat"):
     """
     If chat_id is provided, fetch that chat from DB.
     If not, create a new chat with system prompt.
@@ -153,7 +140,9 @@ def get_or_create_chat(user_id, data, conversation_type="chat", language="Englis
 
     # Otherwise create new
     conversation_history, chat_title, new_id, schedules = (
-        create_new_chat_with_system_prompt(user_id, user, conversation_type, language)
+        create_new_chat_with_system_prompt(
+            user_id, user, assistant_id, conversation_type
+        )
     )
     return {}, conversation_history, chat_title, new_id, schedules
 
@@ -408,12 +397,15 @@ def chat():
             return jsonify({"error": "Prompt is required"}), 400
         prompt = data["prompt"]
 
+        assistant_id = data.get("assistant_id")
+        if not assistant_id:
+            return jsonify({"error": "Assistant ID is required"}), 400
+
         conversation_type = data.get("type", "chat")
-        language = data.get("language", "English")
 
         # 1) Load or create chat
         chat_doc, conversation_history, chat_title, chat_id, schedules = (
-            get_or_create_chat(user_id, data, conversation_type, language)
+            get_or_create_chat(user_id, data, assistant_id, conversation_type)
         )
         if conversation_history is None:
             return jsonify({"error": "Chat not found or unauthorized"}), 404

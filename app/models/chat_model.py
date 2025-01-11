@@ -20,6 +20,7 @@ class ChatModel:
 
     Attributes:
         user_id (ObjectId): The ID of the user who owns the chat.
+        assitant_id (ObjectId): The ID of the assistant who the user is communicating with.
         messages (list): A list of messages in the conversation. Each message is a dict with 'role' and 'content'.
         created_at (datetime): Timestamp when the chat was created.
         updated_at (datetime): Timestamp when the chat was last updated.
@@ -28,8 +29,8 @@ class ChatModel:
     def __init__(
         self,
         user_id,
+        assistant_id,
         messages=None,
-        title=None,
         summary_so_far=None,
         pending_schedule=None,
         pending_schedule_step=None,
@@ -38,8 +39,8 @@ class ChatModel:
         updated_at=None,
     ):
         self.user_id = ObjectId(user_id)
+        self.assistant_id = ObjectId(assistant_id)
         self.messages = messages or []
-        self.title = title
         self.summary_so_far = summary_so_far
         self.pending_schedule = pending_schedule or {}
         self.pending_schedule_step = pending_schedule_step or None
@@ -50,8 +51,8 @@ class ChatModel:
     def to_dict(self):
         return {
             "user_id": self.user_id,
+            "assistant_id": self.assistant_id,
             "messages": self.messages,
-            "title": self.title,
             "summary_so_far": self.summary_so_far,
             "pending_schedule": self.pending_schedule,
             "pending_schedule_step": self.pending_schedule_step,
