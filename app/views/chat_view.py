@@ -45,8 +45,6 @@ def create_new_chat_with_system_prompt(
     """
     # Summaries
     schedules = get_30_day_schedules_for_user(user_id)
-    
-    print(schedules)
 
     if schedules:
         schedules_readable = format_schedule_human_readable({"schedules": schedules})
@@ -72,10 +70,11 @@ def create_new_chat_with_system_prompt(
             "   - volume/pitch variations for emotional effect\n"
             "4) Focus on scheduling tasks from 30 days before and after today. If the user wants to create, update, or delete a schedule, do so in this phone conversation style.\n"
             "5) Always ask clarifying questions if details are missing.\n"
-            "If the user asks to create a schedule, ask for all info needed to create it. Ask for only date and time and name for now. "
-            "If the user asks to update a schedule, ask for the schedule they want to update and the information they want to change. "
-            "If the user asks to delete a schedule, ask for the schedule they want to delete. "
-            "If the user asks for more than one action to be done at the same time. Make sure you get all the info needed for all tasks."
+            "If the user asks to create a schedule, ask for all info needed to create it. Ask for only start date and time, end date and time and name for now. \n"
+            "If the user asks to update a schedule, ask for the schedule they want to update and the information they want to change. \n"
+            "If the user asks to delete a schedule, ask for the schedule they want to delete. \n"
+            "If the user does not specify a date, assume they mean today. \n"
+            "If the user asks for more than one action to be done at the same time. Make sure you get all the info needed for all tasks.\n"
             "6) Always confirm changes (create/update/delete) before finalizing them.\n"
             "7) No disclaimers, no code blocks—only SSML.\n"
             "8) Assume the user can handle the SSML output directly in a TTS engine.\n\n"
@@ -100,10 +99,11 @@ def create_new_chat_with_system_prompt(
             f"Here’s a summary of older announcements:\n\n{summary_seen}\n\n"
             "Greet the user warmly and talk about their current tasks and announcements. "
             "Keep the vibe casual and helpful. "
-            "If the user asks to create a schedule, ask for all info needed to create it. Ask for only date and time and name for now. "
-            "If the user asks to update a schedule, ask for the schedule they want to update and the information they want to change. "
-            "If the user asks to delete a schedule, ask for the schedule they want to delete. "
-            "If the user asks for more than one action to be done at the same time. Make sure you get all the info needed for all tasks."
+            "If the user asks to create a schedule, ask for all info needed to create it. Ask for only start date and time, end date and time and name for now. \n"
+            "If the user asks to update a schedule, ask for the schedule they want to update and the information they want to change. \n"
+            "If the user asks to delete a schedule, ask for the schedule they want to delete. \n"
+            "If the user does not specify a date, assume they mean today. \n"
+            "If the user asks for more than one action to be done at the same time. Make sure you get all the info needed for all tasks.\n"
             "After finding out what the user wants to create, update or delete and with what, ALWAYS ALWAYS ask for confirmation. "
             "Today's date is " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "."
             "Use the current date and time as a reference for the user's schedules, requests and announcements."
@@ -203,26 +203,30 @@ def actually_create_schedule(
 ):
     """
     Creates schedule in DB and returns the AI-generated success/fail message.
-    schedule_data: { "title": str, "start_time": datetime, "end_time": optional }
+    schedule_data: { "title": str, "start_time": datetime, "end_time": datetime, "image": str }
     """
     try:
         title = schedule_data.get("title", "Untitled")
         start_dt = schedule_data.get("start_time", datetime.now())
         end_dt = schedule_data.get("end_time")
+        image = schedule_data.get("image")
 
         payload = {
             "user_id": user_id,
             "reminder_message": title,
             "schedule_date": start_dt,
+            "schedule_end_date": end_dt,
+            "image": image,
             "recurrence": None,
             "status": "Pending",
         }
+
         created_id = create_schedule(payload)
         # If we got here, success
         schedule_info = {
             "title": title,
             "start_time": start_dt.isoformat(),
-            "end_time": end_dt.isoformat() if end_dt else None,
+            "end_time": end_dt.isoformat(),
             "created_id": created_id,
         }
         # We call the LLM to produce a success message:
@@ -248,7 +252,6 @@ def actually_create_schedule(
             conversation_history=conversation_history or [],
             conversation_type=conversation_type,
         )
-        print(final_msg)
         return None, final_msg
 
 
@@ -287,6 +290,8 @@ def actually_update_schedule(
             updates["reminder_message"] = new_title
         if new_start:
             updates["schedule_date"] = new_start
+        if new_end:
+            updates["schedule_end_date"] = new_end
 
         if not updates:
             raise ValueError("No new changes provided.")
@@ -435,6 +440,7 @@ def chat():
                     schedule_title = action_dict["schedule_title"]
                     start_dt = action_dict["start_time"]
                     end_dt = action_dict["end_time"]
+                    image = action_dict.get("image")
 
                     if schedule_title and start_dt:
                         created_id, success_msg = actually_create_schedule(
@@ -442,6 +448,7 @@ def chat():
                                 "title": schedule_title,
                                 "start_time": start_dt,
                                 "end_time": end_dt,
+                                "image": image,
                             },
                             user_id,
                             conversation_history,

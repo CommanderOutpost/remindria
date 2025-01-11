@@ -21,7 +21,8 @@ class ScheduleModel:
     Attributes:
         user_id (str): The ID of the user the schedule belongs to (foreign key reference to Users).
         reminder_message (str): The message or note for the reminder.
-        schedule_date (datetime): The date and time for the scheduled reminder.
+        schedule_date (datetime): The start date and time for the scheduled reminder.
+        schedule_end_date (datetime): The end date and time for the scheduled reminder (mandatory).
         recurrence (str, optional): The recurrence pattern for the reminder. Can be:
             - None: No recurrence (default).
             - "Daily": The reminder repeats daily.
@@ -31,6 +32,8 @@ class ScheduleModel:
             - "Pending": The reminder is awaiting execution.
             - "Completed": The reminder has been executed successfully.
             - "Skipped": The reminder was skipped or missed.
+        event_id (str, optional): Identifier for an associated Google Calendar event, if relevant.
+        image (str, optional): Image name
         created_at (datetime, optional): The timestamp when the schedule was created. Defaults to the current UTC time.
         updated_at (datetime, optional): The timestamp when the schedule was last updated. Defaults to the current UTC time.
 
@@ -44,9 +47,11 @@ class ScheduleModel:
         user_id,
         reminder_message,
         schedule_date,
+        schedule_end_date,
         recurrence=None,
         status="Pending",
         event_id=None,
+        image=None,
         created_at=None,
         updated_at=None,
     ):
@@ -56,18 +61,25 @@ class ScheduleModel:
         Args:
             user_id (str): The ID of the user the schedule belongs to (foreign key reference to Users).
             reminder_message (str): The message or note for the reminder.
-            schedule_date (datetime): The date and time for the scheduled reminder.
-            recurrence (str, optional): The recurrence pattern for the reminder. Defaults to None.
+            schedule_date (datetime): The start date/time for the scheduled reminder.
+            schedule_end_date (datetime): The end date/time for the scheduled reminder.
+            recurrence (str, optional): The recurrence pattern for the reminder (None, "Daily", "Weekly", "Monthly").
             status (str, optional): The current status of the schedule. Defaults to "Pending".
-            created_at (datetime, optional): The timestamp when the schedule was created. Defaults to the current UTC time.
-            updated_at (datetime, optional): The timestamp when the schedule was last updated. Defaults to the current UTC time.
+            event_id (str, optional): Google Calendar event ID (if synced).
+            image (str, optional): Image name
+            created_at (datetime, optional): The timestamp when the schedule was created. Defaults to current UTC time.
+            updated_at (datetime, optional): The timestamp when the schedule was last updated. Defaults to current UTC time.
         """
         self.user_id = user_id  # Foreign key from Users (ObjectId reference)
         self.reminder_message = reminder_message  # Text for the reminder
-        self.schedule_date = schedule_date  # Date and time for the reminder
+        self.schedule_date = schedule_date  # Start date/time for the reminder
+        self.schedule_end_date = (
+            schedule_end_date  # End date/time for the reminder (NEW)
+        )
         self.recurrence = recurrence  # None/Daily/Weekly/Monthly
         self.status = status  # Pending, Completed, Skipped
         self.event_id = event_id  # Google Calendar event ID (if synced)
+        self.image = image  # Image name
         self.created_at = created_at or datetime.now(timezone.utc)  # Creation timestamp
         self.updated_at = updated_at or datetime.now(
             timezone.utc
@@ -81,24 +93,28 @@ class ScheduleModel:
             dict: A dictionary representation of the schedule, with the following keys:
                 - "user_id" (ObjectId): The ID of the user (converted to ObjectId).
                 - "reminder_message" (str): The message or note for the reminder.
-                - "schedule_date" (datetime): The date and time for the scheduled reminder.
+                - "schedule_date" (datetime): The start date/time for the scheduled reminder.
+                - "schedule_end_date" (datetime): The end date/time for the scheduled reminder.
                 - "recurrence" (str): The recurrence pattern for the reminder.
                 - "status" (str): The current status of the schedule.
+                - "event_id" (str, optional): The Google Calendar event ID if synced.
+                - "image" (str, optional): Image name
                 - "created_at" (datetime): The creation timestamp of the schedule.
                 - "updated_at" (datetime): The last update timestamp of the schedule.
         """
         schedule_dict = {
-            # Existing fields...
             "user_id": ObjectId(self.user_id),
             "reminder_message": self.reminder_message,
             "schedule_date": self.schedule_date,
+            "schedule_end_date": self.schedule_end_date,  # NEW
             "recurrence": self.recurrence,
             "status": self.status,
+            "image": self.image,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
         if self.event_id:
-            schedule_dict["event_id"] = self.event_id  # Add this line
+            schedule_dict["event_id"] = self.event_id
         return schedule_dict
 
 
@@ -111,9 +127,12 @@ def create_schedule(schedule_data):
         schedule_data (dict): A dictionary containing the schedule details. Must include:
             - user_id (str): The ID of the user the schedule belongs to.
             - reminder_message (str): The message to remind the user.
-            - schedule_date (datetime): The date and time for the reminder.
+            - schedule_date (datetime): The start date/time for the schedule.
+            - schedule_end_date (datetime): The end date/time for the schedule (mandatory).
             - recurrence (str, optional): Recurrence type (e.g., "None", "Daily", "Weekly", "Monthly").
             - status (str, optional): The status of the schedule (default is "Pending").
+            - event_id (str, optional): Google Calendar event ID (if synced).
+            - image (str, optional): Image name
 
     Returns:
         str: The ID of the newly created schedule as a string.
@@ -121,10 +140,18 @@ def create_schedule(schedule_data):
     Raises:
         ValueError: If required fields are missing or invalid.
         pymongo.errors.PyMongoError: If there is a database-related error.
+
+    Warning:
+        Always ensure that 'schedule_end_date' >= 'schedule_date'. Otherwise it may cause unexpected logic issues.
     """
     try:
         # Validate required fields
-        required_fields = ["user_id", "reminder_message", "schedule_date"]
+        required_fields = [
+            "user_id",
+            "reminder_message",
+            "schedule_date",
+            "schedule_end_date",
+        ]
         for field in required_fields:
             if field not in schedule_data or not schedule_data[field]:
                 raise ValueError(f"'{field}' is a required field and cannot be empty.")
@@ -132,6 +159,22 @@ def create_schedule(schedule_data):
         # Ensure schedule_date is a valid datetime object
         if not isinstance(schedule_data["schedule_date"], datetime):
             raise ValueError("'schedule_date' must be a valid datetime object.")
+
+        # Ensure schedule_end_date is a valid datetime object
+        if not isinstance(schedule_data["schedule_end_date"], datetime):
+            raise ValueError("'schedule_end_date' must be a valid datetime object.")
+
+        # Ensure that schedule_end_date >= schedule_date
+        if schedule_data["schedule_end_date"] < schedule_data["schedule_date"]:
+            raise ValueError("'schedule_end_date' cannot be before 'schedule_date'.")
+
+        # Convert schedule_date and schedule_end_date to ISO format
+        schedule_data["schedule_date"] = schedule_data["schedule_date"].astimezone(
+            timezone.utc
+        )
+        schedule_data["schedule_end_date"] = schedule_data[
+            "schedule_end_date"
+        ].astimezone(timezone.utc)
 
         # Create and insert the schedule
         schedule = ScheduleModel(**schedule_data)
@@ -376,7 +419,8 @@ def update_schedule(schedule_id, updates):
         int: The number of documents modified (should be 0 or 1).
 
     Raises:
-        ValueError: If the provided schedule_id is not a valid ObjectId or if updates are empty.
+        ValueError: If the provided schedule_id is not a valid ObjectId, if updates are empty, or if
+                    schedule_date is not earlier than schedule_end_date.
         pymongo.errors.PyMongoError: If there is a database-related error.
     """
     try:
@@ -387,6 +431,47 @@ def update_schedule(schedule_id, updates):
         # Ensure updates are provided
         if not updates or not isinstance(updates, dict):
             raise ValueError("The 'updates' argument must be a non-empty dictionary.")
+
+        # Retrieve the existing schedule to validate date constraints
+        existing_schedule = schedule_collection.find_one({"_id": ObjectId(schedule_id)})
+        if not existing_schedule:
+            raise ValueError(f"No schedule found with ID '{schedule_id}'.")
+
+        # Determine the updated schedule_date and schedule_end_date
+        updated_schedule_date = updates.get(
+            "schedule_date", existing_schedule.get("schedule_date")
+        )
+        if isinstance(updated_schedule_date, datetime):
+            updated_schedule_date = updated_schedule_date.isoformat()
+
+        updated_schedule_end_date = updates.get(
+            "schedule_end_date", existing_schedule.get("schedule_end_date")
+        )
+        if isinstance(updated_schedule_end_date, datetime):
+            updated_schedule_end_date = updated_schedule_end_date.isoformat()
+
+        # Ensure schedule_date is before schedule_end_date
+        if updated_schedule_date and updated_schedule_end_date:
+            # Convert back to datetime for comparison
+            updated_schedule_date_dt = datetime.fromisoformat(updated_schedule_date)
+            updated_schedule_end_date_dt = datetime.fromisoformat(
+                updated_schedule_end_date
+            )
+            if updated_schedule_end_date_dt < updated_schedule_date_dt:
+                raise ValueError(
+                    "'schedule_end_date' cannot be earlier than 'schedule_date'. Please adjust the dates."
+                )
+
+        # Standardize dates in the updates dictionary
+        if "schedule_date" in updates and isinstance(
+            updates["schedule_date"], datetime
+        ):
+            updates["schedule_date"] = updates["schedule_date"].isoformat()
+
+        if "schedule_end_date" in updates and isinstance(
+            updates["schedule_end_date"], datetime
+        ):
+            updates["schedule_end_date"] = updates["schedule_end_date"].isoformat()
 
         # Automatically update the `updated_at` timestamp
         updates["updated_at"] = datetime.now(timezone.utc)

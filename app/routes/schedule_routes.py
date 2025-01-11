@@ -10,6 +10,7 @@ from app.views.schedule_view import (
     get_recent_schedules,
     get_schedules_in_date_range_view,
     delete_all_schedules,
+    get_schedules_on_date_view,
 )
 
 # Create a blueprint for schedule routes
@@ -48,3 +49,7 @@ schedule_routes.add_url_rule(
 schedule_routes.add_url_rule(
     "/range", view_func=get_schedules_in_date_range_view, methods=["GET"]
 )  # Get schedules within a specific time range
+
+schedule_routes.add_url_rule(
+    "/date/<date_str>", view_func=get_schedules_on_date_view, methods=["GET"]
+)  # Get schedules on a specific date

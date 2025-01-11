@@ -5,6 +5,7 @@ import json
 from app.utils.helper import extract_json_from_text, parse_datetime, extract_speak_block
 from config import config
 from typing import Optional, Dict, Any, List
+import datetime
 
 
 load_dotenv()
@@ -280,7 +281,8 @@ def parse_natural_language_instructions(
         '     "intent": "add_schedule",\n'
         '     "schedule_title": "Event Title",\n'
         '     "start_time": "YYYY-MM-DD HH:MM:SS",\n'
-        '     "end_time": "YYYY-MM-DD HH:MM:SS"  // optional\n'
+        '     "end_time": "YYYY-MM-DD HH:MM:SS"\n'
+        '     "image": "image name" // optional, This is an image name describing what would be used to display\n'
         "   },\n"
         "   JSON for updating a schedule"
         "   {\n"
@@ -305,8 +307,11 @@ def parse_natural_language_instructions(
         "- Either a valid JSON array of objects or 'null'.\n"
         "- Even if there's only a single action, it must still be in an array like `[ {...} ]`.\n\n"
         "- The most recent information the user provides is what would be used.\n"
+        "- For image name, you must only pick from the following: 'woman_taking_dog_on_walk', 'man_cooking', 'woman_cleaning', 'man_reading', 'woman_exercising'\n"
+        "- Pick the image that best describes the schedule. If there isn't a good describing image for the current schedule, don't provide the image field.\n"
         "- You would assess the entire conversation to find out what the user wants to do and you would do it well."
         "- You will only return the json when the other AI asks for confirmation and the user accepts the confirmation."
+        f"- The date and time right now is {datetime.datetime.now().strftime("%Y-%m-%d-%H-%M")} \n"
         f"Schedules we are working with are: {schedules}"
     )
 
@@ -371,6 +376,7 @@ def parse_natural_language_instructions(
                 if item.get("end_time")
                 else None
             )
+            image = item.get("image", "")
             if not start_dt:
                 print("No valid start_time found for add_schedule item.")
                 return None
@@ -379,6 +385,7 @@ def parse_natural_language_instructions(
                 "schedule_title": item.get("schedule_title", ""),
                 "start_time": start_dt,
                 "end_time": end_dt,
+                "image": image,
             }
             final_actions.append(action)
 
@@ -432,5 +439,7 @@ def parse_natural_language_instructions(
             # Unrecognized intent
             print(f"Unrecognized intent in item: {item}")
             return None
+        
+    print(final_actions)
 
     return final_actions if final_actions else None

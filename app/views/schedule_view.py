@@ -43,6 +43,7 @@ def add_schedule():
         {
             "reminder_message": "string",  # Reminder message (required)
             "schedule_date": "string",  # ISO 8601 format datetime (required)
+            "schedule_end_date": "string",  # ISO 8601 format datetime (optional)
             "recurrence": "string",  # Recurrence type (optional, e.g., "None", "Daily", "Weekly", "Monthly")
             "status": "string"  # Status (optional, default is "Pending")
         }
@@ -64,19 +65,22 @@ def add_schedule():
             return jsonify({"error": "Unauthorized access"}), 401
 
         # Validate required fields
-        required_fields = ["reminder_message", "schedule_date"]
+        required_fields = ["reminder_message", "schedule_date", "schedule_end_date"]
         for field in required_fields:
             if field not in data or not data[field]:
                 return jsonify({"error": f"'{field}' is a required field"}), 400
 
-        # Validate schedule_date
+        # Validate schedule_date and schedule_end_date
         try:
             data["schedule_date"] = datetime.fromisoformat(data["schedule_date"])
+            data["schedule_end_date"] = datetime.fromisoformat(
+                data["schedule_end_date"]
+            )
         except ValueError:
             return (
                 jsonify(
                     {
-                        "error": "'schedule_date' must be a valid ISO 8601 datetime string"
+                        "error": "'schedule_date' and 'schedule_end_date' must be a valid ISO 8601 datetime string"
                     }
                 ),
                 400,
@@ -87,6 +91,7 @@ def add_schedule():
             "user_id": user_id,  # Use the authenticated user's ID
             "reminder_message": data["reminder_message"],
             "schedule_date": data["schedule_date"],
+            "schedule_end_date": data["schedule_end_date"],
             "recurrence": data.get("recurrence", None),  # Optional field
             "status": data.get("status", "Pending"),  # Default to "Pending"
         }
@@ -122,6 +127,7 @@ def update_schedule(id):
             "updates": {  # Fields to update (at least one required)
                 "reminder_message": "string",
                 "schedule_date": "string",  # ISO 8601 format datetime
+                "schedule_end_date": "string",  # ISO 8601 format datetime
                 "recurrence": "string",
                 "status": "string"
             }
@@ -151,18 +157,33 @@ def update_schedule(id):
         if not ObjectId.is_valid(schedule_id):
             return jsonify({"error": "'schedule_id' is not a valid ObjectId"}), 400
 
-        # Validate schedule_date if provided
+        # Validate schedule_date and schedule_end_date if provided
         if "schedule_date" in updates:
             try:
                 updates["schedule_date"] = datetime.fromisoformat(
                     updates["schedule_date"]
-                )
+                ).astimezone(timezone.utc)
             except ValueError:
-                print("ValueError")
                 return (
                     jsonify(
                         {
                             "error": "'schedule_date' must be a valid ISO 8601 datetime string"
+                        }
+                    ),
+                    400,
+                )
+
+        if "schedule_end_date" in updates:
+            try:
+                updates["schedule_end_date"] = datetime.fromisoformat(
+                    updates["schedule_end_date"]
+                ).astimezone(timezone.utc)
+
+            except ValueError:
+                return (
+                    jsonify(
+                        {
+                            "error": "'schedule_end_date' must be a valid ISO 8601 datetime string"
                         }
                     ),
                     400,
@@ -185,7 +206,6 @@ def update_schedule(id):
         return jsonify({"message": "Schedule updated successfully"}), 200
 
     except InvalidId:
-        print("InvalidId")
         return jsonify({"error": "Invalid ObjectId for schedule_id"}), 400
     except Exception as e:
         return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
@@ -774,6 +794,94 @@ def get_schedules_in_date_range_view():
 
     except ValueError as ve:
         return jsonify({"error": f"Validation Error: {str(ve)}"}), 400
+    except InvalidId:
+        return jsonify({"error": "Invalid user ID in JWT"}), 400
+    except Exception as e:
+        return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
+
+
+@jwt_required()
+def get_schedules_on_date_view(date_str):
+    """
+    Retrieves all schedules for the authenticated user on a single specified date.
+
+    URL Parameter:
+        date_str (str): A string representing the date in 'YYYY-MM-DD' format.
+
+    Returns:
+        JSON Response:
+            - Success: {
+                  "schedules": [
+                      {
+                          "_id": "string",
+                          "user_id": "string",
+                          "reminder_message": "string",
+                          "schedule_date": "datetime",
+                          "recurrence": "string",
+                          "status": "string",
+                          "created_at": "datetime",
+                          "updated_at": "datetime",
+                          "event_id": "string"  # Optional
+                      },
+                      ...
+                  ]
+              }
+            - Error: {"error": "string"}
+    """
+    try:
+        # Get the current user's ID from the JWT
+        user_id = get_jwt_identity()
+        if not user_id:
+            return jsonify({"error": "Unauthorized access"}), 401
+
+        # Parse the input date string
+        try:
+            # We only have YYYY-MM-DD, so let's parse that
+            parsed_date = datetime.strptime(date_str, "%Y-%m-%d")
+        except ValueError:
+            return jsonify({"error": "Invalid date format. Use 'YYYY-MM-DD'."}), 400
+
+        # Convert parsed_date into a timezone-aware datetime
+        # Start of the day
+        start_date = datetime(
+            year=parsed_date.year,
+            month=parsed_date.month,
+            day=parsed_date.day,
+            hour=0,
+            minute=0,
+            second=0,
+            tzinfo=timezone.utc,
+        )
+
+        # End of the day
+        end_date = start_date + timedelta(days=1, microseconds=-1)
+        # - Or equivalently: end_date = start_date + timedelta(days=1) - timedelta(microseconds=1)
+
+        # Now fetch schedules in this date range
+        schedules = get_schedules_in_date_range(user_id, start_date, end_date)
+
+        # Return an empty list if no schedules found
+        if not schedules:
+            return jsonify({"schedules": []}), 200
+
+        # Serialize schedules
+        schedules_serialized = [
+            {
+                **schedule,
+                "_id": str(schedule["_id"]),
+                "user_id": str(schedule["user_id"]),
+                "schedule_date": schedule["schedule_date"].isoformat(),
+                "created_at": schedule["created_at"].isoformat(),
+                "updated_at": schedule["updated_at"].isoformat(),
+                **(
+                    {"event_id": schedule["event_id"]} if "event_id" in schedule else {}
+                ),
+            }
+            for schedule in schedules
+        ]
+
+        return jsonify({"schedules": schedules_serialized}), 200
+
     except InvalidId:
         return jsonify({"error": "Invalid user ID in JWT"}), 400
     except Exception as e:
