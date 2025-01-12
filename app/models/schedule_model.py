@@ -2,6 +2,7 @@ from db import db, get_collection  # Import the initialized db object
 from bson.objectid import ObjectId
 from datetime import datetime, timezone, timedelta
 from pymongo.errors import PyMongoError
+from app.models.schedule_record_model import add_record
 
 # Collection reference
 schedule_collection = get_collection(
@@ -179,7 +180,17 @@ def create_schedule(schedule_data):
         # Create and insert the schedule
         schedule = ScheduleModel(**schedule_data)
         result = schedule_collection.insert_one(schedule.to_dict())
-        return str(result.inserted_id)
+        schedule_id = str(result.inserted_id)
+
+        # Add record for the creation
+        record_data = {
+            "user_id": schedule_data["user_id"],
+            "action": "create",
+            "schedule_id": schedule_id,
+        }
+        add_record(record_data)
+
+        return schedule_id
 
     except ValueError as ve:
         raise ValueError(f"Validation Error: {ve}")
@@ -480,7 +491,21 @@ def update_schedule(schedule_id, updates):
         result = schedule_collection.update_one(
             {"_id": ObjectId(schedule_id)}, {"$set": updates}
         )
-        return result.modified_count
+
+        modified_count = result.modified_count
+
+        if modified_count > 0:
+            # Add record for the update
+            record_data = {
+                "user_id": str(
+                    updates.get("user_id")
+                ),  # Extract user_id from updates if available
+                "action": "update",
+                "schedule_id": schedule_id,
+            }
+            add_record(record_data)
+
+        return modified_count
 
     except ValueError as ve:
         raise ValueError(f"Validation Error: {ve}")
@@ -507,9 +532,27 @@ def delete_schedule(schedule_id):
         if not ObjectId.is_valid(schedule_id):
             raise ValueError(f"'{schedule_id}' is not a valid ObjectId.")
 
+        # Find the schedule to get the user_id for recording
+        schedule = schedule_collection.find_one({"_id": ObjectId(schedule_id)})
+        if not schedule:
+            raise ValueError(f"No schedule found with ID '{schedule_id}'.")
+
+        user_id = str(schedule["user_id"])
+
         # Perform the delete operation
         result = schedule_collection.delete_one({"_id": ObjectId(schedule_id)})
-        return result.deleted_count
+        deleted_count = result.deleted_count
+
+        if deleted_count > 0:
+            # Add record for the deletion
+            record_data = {
+                "user_id": user_id,
+                "action": "delete",
+                "schedule_id": schedule_id,
+            }
+            add_record(record_data)
+
+        return deleted_count
 
     except ValueError as ve:
         raise ValueError(f"Validation Error: {ve}")

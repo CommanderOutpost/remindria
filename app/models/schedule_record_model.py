@@ -86,7 +86,6 @@ def add_record(record_data: Dict[str, any]) -> str:
         # Create a ScheduleRecord instance
         record = ScheduleRecord(
             user_id=record_data["user_id"],
-            date_time=record_data["date_time"],
             action=record_data["action"],
             schedule_id=record_data["schedule_id"],
         )
