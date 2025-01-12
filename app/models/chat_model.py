@@ -118,6 +118,63 @@ def find_chats_by_user_id(user_id):
         raise Exception(f"Failed to find chats for user: {e}")
 
 
+def find_chats_by_user_id_and_assistant_id(user_id, assistant_id):
+    """
+    Finds all chats for a user and assistant.
+
+    Args:
+        user_id (str): The ID of the user.
+        assistant_id (str): The ID of the assistant.
+
+    Returns:
+        list: List of chat documents.
+    """
+    try:
+        if not ObjectId.is_valid(user_id):
+            raise ValueError(f"'{user_id}' is not a valid ObjectId.")
+        if not ObjectId.is_valid(assistant_id):
+            raise ValueError(f"'{assistant_id}' is not a valid ObjectId.")
+        chats = list(
+            chat_collection.find(
+                {"user_id": ObjectId(user_id), "assistant_id": ObjectId(assistant_id)}
+            )
+        )
+        return chats
+    except Exception as e:
+        raise Exception(f"Failed to find chats for user and assistant: {e}")
+
+
+def find_chats_by_user_id_and_assistant_id_after_date(user_id, assistant_id, date):
+    """
+    Finds all chats for a user and assistant after a given date and time.
+
+    Args:
+        user_id (str): The ID of the user.
+        assistant_id (str): The ID of the assistant.
+        date (datetime): The date and time to filter chats.
+
+    Returns:
+        list: List of chat documents.
+    """
+    try:
+        if not ObjectId.is_valid(user_id):
+            raise ValueError(f"'{user_id}' is not a valid ObjectId.")
+        if not ObjectId.is_valid(assistant_id):
+            raise ValueError(f"'{assistant_id}' is not a valid ObjectId.")
+        chats = list(
+            chat_collection.find(
+                {
+                    "user_id": ObjectId(user_id),
+                    "assistant_id": ObjectId(assistant_id),
+                    "updated_at": {"$gt": date},
+                }
+            )
+        )
+        return chats
+    except Exception as e:
+        raise Exception(f"Failed to find chats for user and assistant after date: {e}")
+
+
 def find_chats_by_user_id_after_date(user_id, date):
     """
     Finds all chats for a user after a given date and time.
