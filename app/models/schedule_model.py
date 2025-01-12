@@ -10,6 +10,7 @@ schedule_collection = get_collection(
     indexes=[
         [("user_id", 1)],  # Index for filtering by user_id
         [("schedule_date", 1)],  # Index for filtering by schedule_date
+        [("is_deleted", 1)],  # Index for filtering by is_deleted
     ],
 )
 
@@ -37,6 +38,7 @@ class ScheduleModel:
         image (str, optional): Image name
         created_at (datetime, optional): The timestamp when the schedule was created. Defaults to the current UTC time.
         updated_at (datetime, optional): The timestamp when the schedule was last updated. Defaults to the current UTC time.
+        is_deleted (bool): Indicates whether the schedule is soft deleted.
 
     Methods:
         to_dict():
@@ -55,6 +57,7 @@ class ScheduleModel:
         image=None,
         created_at=None,
         updated_at=None,
+        is_deleted=False,
     ):
         """
         Initializes a new ScheduleModel instance.
@@ -70,6 +73,7 @@ class ScheduleModel:
             image (str, optional): Image name
             created_at (datetime, optional): The timestamp when the schedule was created. Defaults to current UTC time.
             updated_at (datetime, optional): The timestamp when the schedule was last updated. Defaults to current UTC time.
+            is_deleted (bool, optional): Indicates if the schedule is soft deleted. Defaults to False.
         """
         self.user_id = user_id  # Foreign key from Users (ObjectId reference)
         self.reminder_message = reminder_message  # Text for the reminder
@@ -85,6 +89,7 @@ class ScheduleModel:
         self.updated_at = updated_at or datetime.now(
             timezone.utc
         )  # Last update timestamp
+        self.is_deleted = is_deleted  # Soft delete flag
 
     def to_dict(self):
         """
@@ -102,6 +107,7 @@ class ScheduleModel:
                 - "image" (str, optional): Image name
                 - "created_at" (datetime): The creation timestamp of the schedule.
                 - "updated_at" (datetime): The last update timestamp of the schedule.
+                - "is_deleted" (bool): Indicates if the schedule is soft deleted.
         """
         schedule_dict = {
             "user_id": ObjectId(self.user_id),
@@ -113,6 +119,7 @@ class ScheduleModel:
             "image": self.image,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "is_deleted": self.is_deleted,
         }
         if self.event_id:
             schedule_dict["event_id"] = self.event_id
@@ -219,7 +226,9 @@ def find_schedule_by_id(schedule_id):
             raise ValueError(f"'{schedule_id}' is not a valid ObjectId.")
 
         # Find the schedule in the database
-        schedule = schedule_collection.find_one({"_id": ObjectId(schedule_id)})
+        schedule = schedule_collection.find_one(
+            {"_id": ObjectId(schedule_id), "is_deleted": False}
+        )
         if not schedule:
             return None
         return schedule
@@ -252,7 +261,7 @@ def find_schedules_by_user_id(user_id, amount=None):
             raise ValueError(f"'{user_id}' is not a valid ObjectId.")
 
         # Fetch schedules for the user with an optional limit
-        query = {"user_id": ObjectId(user_id)}
+        query = {"user_id": ObjectId(user_id), "is_deleted": False}
         if amount is None:
             schedules = list(schedule_collection.find(query))
         else:
@@ -558,6 +567,57 @@ def delete_schedule(schedule_id):
         raise ValueError(f"Validation Error: {ve}")
     except Exception as e:
         raise Exception(f"Failed to delete schedule with ID '{schedule_id}': {e}")
+
+
+# Function to soft delete a schedule by ID
+def soft_delete_schedule(schedule_id):
+    """
+    Soft deletes a schedule by setting the 'is_deleted' field to True.
+
+    Args:
+        schedule_id (str): The ID of the schedule to soft delete.
+
+    Returns:
+        int: The number of documents modified (should be 1).
+
+    Raises:
+        ValueError: If the provided schedule_id is not a valid ObjectId.
+        pymongo.errors.PyMongoError: If there is a database-related error.
+    """
+    try:
+        # Validate the schedule_id
+        if not ObjectId.is_valid(schedule_id):
+            raise ValueError(f"'{schedule_id}' is not a valid ObjectId.")
+
+        # Find the schedule to get the user_id for recording
+        schedule = schedule_collection.find_one({"_id": ObjectId(schedule_id)})
+        if not schedule:
+            raise ValueError(f"No schedule found with ID '{schedule_id}'.")
+
+        user_id = str(schedule["user_id"])
+
+        # Perform the soft delete operation
+        result = schedule_collection.update_one(
+            {"_id": ObjectId(schedule_id)},
+            {"$set": {"is_deleted": True, "updated_at": datetime.now(timezone.utc)}},
+        )
+        modified_count = result.modified_count
+
+        if modified_count > 0:
+            # Add record for the soft deletion
+            record_data = {
+                "user_id": user_id,
+                "action": "soft_delete",
+                "schedule_id": schedule_id,
+            }
+            add_record(record_data)
+
+        return modified_count
+
+    except ValueError as ve:
+        raise ValueError(f"Validation Error: {ve}")
+    except Exception as e:
+        raise Exception(f"Failed to soft delete schedule with ID '{schedule_id}': {e}")
 
 
 def delete_all_schedules_for_user(user_id):
