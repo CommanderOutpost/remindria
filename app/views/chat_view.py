@@ -30,7 +30,6 @@ from app.ai.caller import (
     generate_action_response,
     get_ai_response,
     summarize_with_ai,
-    generate_chat_title,
     parse_natural_language_instructions,
 )
 from bson.errors import InvalidId
@@ -42,7 +41,7 @@ def create_new_chat_with_system_prompt(
 ):
     """
     Creates a new chat doc with a system prompt tailored to the user's schedule & announcements.
-    Returns: (conversation_history, chat_title, new_chat_id)
+    Returns: (conversation_history, assistant_id, new_chat_id)
     """
     # Summaries
     schedules = get_30_day_schedules_for_user(user_id)
@@ -93,18 +92,16 @@ def create_new_chat_with_system_prompt(
 
     if conversation_type == "call":
         system_prompt = (
-            f"You are {assistant_name}. You speak only {assistant_language}. Your personality is {assistant_personality}. \n"
-            f"{call_rules}"
-            f"{mandatory_rules}"
+            f"You are {assistant_name}. You speak only {assistant_language}. {assistant_personality}. \n\n"
+            f"{call_rules}\n\n"
+            f"{mandatory_rules}\n\n"
         )
 
     else:
-        system_prompt = {
-            f"You are {assistant_name}. You speak only {assistant_language}. Your personality is {assistant_personality}. \n"
-            f"{mandatory_rules}"
-        }
-
-    chat_title = "Chat with Remindria"
+        system_prompt = (
+            f"You are {assistant_name}. You speak only {assistant_language}. {assistant_personality}. \n\n"
+            f"{mandatory_rules}\n\n"
+        )
 
     # Start conversation with system message
     conversation_history = [{"role": "system", "content": system_prompt}]
@@ -113,12 +110,12 @@ def create_new_chat_with_system_prompt(
     chat_data = {
         "user_id": user_id,
         "messages": conversation_history,
-        "title": chat_title,
+        "assistant_id": assistant_id,
         "conversation_type": conversation_type,
     }
 
     new_chat_id = create_chat(chat_data)
-    return conversation_history, chat_title, new_chat_id, schedules
+    return conversation_history, assistant_id, new_chat_id, schedules
 
 
 def get_or_create_chat(user_id, data, assistant_id, conversation_type="chat"):
@@ -136,15 +133,15 @@ def get_or_create_chat(user_id, data, assistant_id, conversation_type="chat"):
         chat = find_chat_by_id(chat_id)
         if not chat or str(chat["user_id"]) != user_id:
             return None, None, None, None, None
-        return chat, chat["messages"], chat["title"], chat_id, None
+        return chat, chat["messages"], chat["assistant_id"], chat_id, None
 
     # Otherwise create new
-    conversation_history, chat_title, new_id, schedules = (
+    conversation_history, assistant_id, new_id, schedules = (
         create_new_chat_with_system_prompt(
             user_id, user, assistant_id, conversation_type
         )
     )
-    return {}, conversation_history, chat_title, new_id, schedules
+    return {}, conversation_history, assistant_id, new_id, schedules
 
 
 def append_user_message(chat_id, conversation_history, user_prompt):
@@ -404,7 +401,7 @@ def chat():
         conversation_type = data.get("type", "chat")
 
         # 1) Load or create chat
-        chat_doc, conversation_history, chat_title, chat_id, schedules = (
+        chat_doc, conversation_history, assistant_id, chat_id, schedules = (
             get_or_create_chat(user_id, data, assistant_id, conversation_type)
         )
         if conversation_history is None:

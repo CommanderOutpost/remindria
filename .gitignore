@@ -6,3 +6,4 @@ print.txt
 *.json
 logs/
 locustfile.py
+app/models/model_scripts/

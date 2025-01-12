@@ -1,9 +1,9 @@
-from db import db, get_collection  # Import the initialized db object
+from db import get_collection  # Import the initialized db object
 from typing import Dict
 from bson.objectid import ObjectId  # Import ObjectId to handle MongoDB IDs
 
 # Collection reference
-voice_settings_collection = db["assistants"]
+voice_settings_collection = get_collection("assistants")
 
 
 # Assistants schema
